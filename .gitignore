@@ -1,0 +1,15 @@
+# Virtual Environment
+venv/
+env/
+
+# Environment variables
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+
+# Experiment outputs
+experiments/
+logs/
+wandb/
