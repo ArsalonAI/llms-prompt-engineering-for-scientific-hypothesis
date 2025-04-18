@@ -32,61 +32,45 @@ def run_idea_generation_batch(
         quality_evaluator: Optional function to evaluate idea quality
     """
     global _previous_ideas
-    pruned_ideas = []
     
     # Generate ideas
     for _ in range(num_ideas):
-        start_time = time.time()
+        # Generate and evaluate idea
         idea = llama_fn(prompt)
-        elapsed_time = time.time() - start_time
-        
-        # Evaluate quality if evaluator provided
         evaluation_results = quality_evaluator(idea) if quality_evaluator else {"is_accepted": True}
-        is_pruned = not evaluation_results.get("is_accepted", True)  # Note: we invert is_accepted to get is_pruned
-        
-        if not is_pruned:
-            pruned_ideas.append(idea)
         
         # Calculate similarity metrics
         cosine_sim = get_cosine_similarity(idea, _previous_ideas)
-        self_bleu = get_self_bleu(idea, _previous_ideas)
-        bertscore = get_bertscore(idea, _previous_ideas)
-        llm_cat, llm_score = None, None  # We'll implement this later if needed
+        self_bleu_score = get_self_bleu(idea, _previous_ideas)
+        bert_score = get_bertscore(idea, _previous_ideas)
         
+        # Track for future similarity comparisons
         _previous_ideas.append(idea)
         
-        # Format timestamp and run identifier
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Format run identifier
         run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
         
-        # Create experiment data matching the DEFAULT_TABLE_COLUMNS structure
+        # Create experiment data matching the schema exactly
         experiment_data = [
-            timestamp,                    # timestamp
-            "hypothesis_generation",      # experiment_type
-            "",                          # system_prompt
-            prompt,                      # user_prompt
-            idea,                        # completion
-            f"{elapsed_time:.2f}",       # elapsed_time
-            model_name,                  # model
-            run_identifier,              # run_id
-            f"{cosine_sim:.3f}",         # cosine_similarity
-            llm_cat or "",               # llm_similarity_category
-            f"{llm_score:.2f}" if llm_score is not None else "",  # llm_similarity_score
-            {  # Additional metrics dict
-                "elapsed_time": elapsed_time,
-                "cosine_similarity": cosine_sim,
-                "self_bleu": self_bleu,
-                "bertscore": bertscore,
-                "evaluation": evaluation_results.get("evaluation", ""),
-                "is_pruned": is_pruned,
-                "run_id": run_identifier
+            run_identifier,                                    # run_id
+            idea,                                             # idea
+            prompt,                                           # batch_prompt
+            evaluation_results.get("evaluation", ""),         # judged_quality
+            not evaluation_results.get("is_accepted", True),  # is_pruned (inverted is_accepted)
+            f"{cosine_sim:.3f}",                             # cosine_sim
+            f"{self_bleu_score:.3f}",                        # self_bleu
+            f"{bert_score:.3f}",                             # bertscore
+            {  # Additional metrics for wandb logging
+                "model": model_name,
+                "elapsed_time": time.time(),
+                "evaluation_full": evaluation_results
             }
         ]
         
-        # Log to wandb and terminal
-        log_experiment_to_wandb(timestamp, experiment_data)
+        # Log to wandb
+        log_experiment_to_wandb(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), experiment_data)
     
-    return pruned_ideas  # Return the list of ideas that weren't pruned
+    return _previous_ideas  # Return the list of ideas generated
 
 
 def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abstracts, llama_fn, model_name, prompt, run_id=None):

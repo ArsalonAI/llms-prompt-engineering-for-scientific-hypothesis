@@ -1,5 +1,5 @@
 # main.py
-from wandb_utils import init_wandb
+from wandb_utils import init_wandb, finish_wandb_run
 from experiment_schemas import LLM_IDEA_GENERATION_COLUMNS
 from experiment_runner_templates import run_idea_generation_batch
 from completion_util import llama_3_3_70B_completion
@@ -8,6 +8,10 @@ from evaluation_utils import HypothesisEvaluator
 from pdf_util import extract_text_from_pdf, extract_sections, clean_text
 from prompts.scientific_prompts import generate_scientific_system_prompt, generate_scientific_hypothesis_prompt
 import os
+
+# Get the absolute path to the src directory
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SRC_DIR)
 
 # Extract and process research paper
 def extract_paper_content(pdf_path):
@@ -29,8 +33,9 @@ def extract_paper_content(pdf_path):
         'sections': sections
     }
 
-# Process the research paper
-pdf_path = os.path.join('research_papers', 'nihms-1761240.pdf')
+# Process the research paper using absolute path
+pdf_path = os.path.join(PROJECT_ROOT, 'src', 'research_papers', 'nihms-1761240.pdf')
+print(f"Loading PDF from: {pdf_path}")
 paper_content = extract_paper_content(pdf_path)
 
 # Initialize components
@@ -48,19 +53,24 @@ main_prompt = generate_scientific_hypothesis_prompt(
     }
 )
 
-# Init W&B run
-init_wandb(
-    project_name="llm-scientific-hypothesis-generation",
-    model_name="llama-3-3-70b",
-    table_columns=LLM_IDEA_GENERATION_COLUMNS
-)
+try:
+    # Init W&B run
+    init_wandb(
+        project_name="llm-scientific-hypothesis-generation",
+        model_name="llama-3-3-70b",
+        table_columns=LLM_IDEA_GENERATION_COLUMNS
+    )
 
-# Run the experiment
-run_idea_generation_batch(
-    prompt=main_prompt,
-    llama_fn=lambda p: llama_3_3_70B_completion(p, system_prompt=system_prompt),
-    model_name="llama-3-3-70b",
-    run_id="crispr_gene_editing_001",
-    num_ideas=10,  # Generate 10 hypotheses
-    quality_evaluator=evaluator.evaluate_hypothesis
-)
+    # Run the experiment
+    results = run_idea_generation_batch(
+        prompt=main_prompt,
+        llama_fn=lambda p: llama_3_3_70B_completion(p, system_prompt=system_prompt),
+        model_name="llama-3-3-70b",
+        run_id="crispr_gene_editing_001",
+        num_ideas=50,  # Generate 50 hypotheses
+        quality_evaluator=evaluator.evaluate_hypothesis
+    )
+
+finally:
+    # Ensure we always finish the run properly
+    finish_wandb_run()
