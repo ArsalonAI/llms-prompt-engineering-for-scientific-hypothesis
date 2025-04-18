@@ -6,7 +6,7 @@ from together import Together
 # Load environment variables
 load_dotenv()
 
-def completion(prompt, system_prompt=None):
+def llama_3_3_70B_completion(prompt, system_prompt=None):
     """
     Get completion from Together AI's Llama model
     

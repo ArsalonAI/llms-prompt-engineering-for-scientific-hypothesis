@@ -2,48 +2,91 @@ import time
 from datetime import datetime
 from similarity_metrics_utils import get_cosine_similarity, get_self_bleu, get_bertscore
 from wandb_utils import log_experiment_to_wandb
-from typing import Optional, List
+from typing import Optional, List, Callable
+from prompts.types import FewShotExample, EvaluationCriteria
+from prompts.few_shot_prompts import generate_few_shot_prompt
+from prompts.role_based_prompts import generate_role_based_prompt, generate_expert_critique_prompt
+from prompts.chain_of_thought_prompts import generate_cot_prompt
+from prompts.evaluator_prompts import generate_evaluator_prompt
 
 
 _previous_ideas = []
 
-def run_idea_generation_batch(prompt, llama_fn, model_name, run_id=None):
+def run_idea_generation_batch(
+    prompt: str,
+    llama_fn: Callable,
+    model_name: str,
+    run_id: Optional[str] = None,
+    num_ideas: int = 10,
+    quality_evaluator: Optional[Callable] = None
+):
+    """
+    Run a batch of idea generations and evaluations.
+    
+    Args:
+        prompt: The prompt to use for generation
+        llama_fn: Function to call the language model
+        model_name: Name of the model being used
+        run_id: Optional identifier for the experiment run
+        num_ideas: Number of ideas to generate
+        quality_evaluator: Optional function to evaluate idea quality
+    """
     global _previous_ideas
-
-    generated_ideas = [llama_fn(prompt) for _ in range(100)]
     pruned_ideas = []
-
-    for idea in generated_ideas:
-        judgment_prompt = f"Is this idea smart or stupid?\n\nIdea: {idea}\n\nAnswer with 'smart' or 'stupid'."
-        judged_quality = llama_fn(judgment_prompt).strip().lower()
-        is_pruned = judged_quality != "stupid"
-
-        if is_pruned:
+    
+    # Generate ideas
+    for _ in range(num_ideas):
+        start_time = time.time()
+        idea = llama_fn(prompt)
+        elapsed_time = time.time() - start_time
+        
+        # Evaluate quality if evaluator provided
+        evaluation_results = quality_evaluator(idea) if quality_evaluator else {"is_accepted": True}
+        is_pruned = not evaluation_results.get("is_accepted", True)  # Note: we invert is_accepted to get is_pruned
+        
+        if not is_pruned:
             pruned_ideas.append(idea)
-
+        
+        # Calculate similarity metrics
         cosine_sim = get_cosine_similarity(idea, _previous_ideas)
         self_bleu = get_self_bleu(idea, _previous_ideas)
         bertscore = get_bertscore(idea, _previous_ideas)
-
+        llm_cat, llm_score = None, None  # We'll implement this later if needed
+        
         _previous_ideas.append(idea)
-
+        
+        # Format timestamp and run identifier
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
-
+        
+        # Create experiment data matching the DEFAULT_TABLE_COLUMNS structure
         experiment_data = [
-            timestamp, run_identifier, "llm_idea_generation", prompt, idea,
-            judged_quality, is_pruned,
-            cosine_sim, self_bleu, bertscore,
-            {
-                "judged_quality": judged_quality,
+            timestamp,                    # timestamp
+            "hypothesis_generation",      # experiment_type
+            "",                          # system_prompt
+            prompt,                      # user_prompt
+            idea,                        # completion
+            f"{elapsed_time:.2f}",       # elapsed_time
+            model_name,                  # model
+            run_identifier,              # run_id
+            f"{cosine_sim:.3f}",         # cosine_similarity
+            llm_cat or "",               # llm_similarity_category
+            f"{llm_score:.2f}" if llm_score is not None else "",  # llm_similarity_score
+            {  # Additional metrics dict
+                "elapsed_time": elapsed_time,
                 "cosine_similarity": cosine_sim,
                 "self_bleu": self_bleu,
                 "bertscore": bertscore,
-                "run_id": run_identifier,
+                "evaluation": evaluation_results.get("evaluation", ""),
+                "is_pruned": is_pruned,
+                "run_id": run_identifier
             }
         ]
-
+        
+        # Log to wandb and terminal
         log_experiment_to_wandb(timestamp, experiment_data)
+    
+    return pruned_ideas  # Return the list of ideas that weren't pruned
 
 
 def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abstracts, llama_fn, model_name, prompt, run_id=None):
@@ -72,13 +115,13 @@ def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abst
 
 def run_prompt_engineering_experiment(
     combined_text: str,
-    llama_fn,
+    llama_fn: Callable,
     model_name: str,
     domain: str = "genetic engineering",
     run_id: Optional[str] = None,
     custom_examples: Optional[List[FewShotExample]] = None,
     custom_role_description: Optional[str] = None,
-    custom_evaluation_criteria: Optional[List[str]] = None
+    custom_evaluation_criteria: Optional[List[EvaluationCriteria]] = None
 ) -> dict:
     """
     Run a comprehensive prompt engineering experiment using different prompting strategies.
@@ -90,33 +133,44 @@ def run_prompt_engineering_experiment(
         domain: Scientific domain for specialization
         run_id: Optional identifier for the experiment run
         custom_examples: Optional list of custom few-shot examples
-        custom_role_description: Optional custom role description for role-based prompting
+        custom_role_description: Optional custom role description
         custom_evaluation_criteria: Optional list of custom evaluation criteria
-        
-    Returns:
-        Dictionary containing the responses and evaluation for each prompting strategy
     """
-    from prompt_templates import PromptTemplates
+    # Generate prompts using different strategies
+    few_shot_prompt = generate_few_shot_prompt(
+        combined_text=combined_text,
+        examples=custom_examples,
+        domain=domain
+    )
     
-    # Generate responses using different prompting strategies
-    few_shot_prompt = PromptTemplates.few_shot_prompt(combined_text, examples=custom_examples)
-    role_prompt = PromptTemplates.role_based_prompt(combined_text, role_description=custom_role_description)
-    cot_prompt = PromptTemplates.chain_of_thought_prompt(combined_text, domain=domain)
+    role_prompt = generate_role_based_prompt(
+        combined_text=combined_text,
+        role_description=custom_role_description,
+        domain=domain
+    )
     
+    cot_prompt = generate_cot_prompt(
+        combined_text=combined_text,
+        domain=domain
+    )
+    
+    # Get responses from the model
     few_shot_response = llama_fn(few_shot_prompt)
     role_response = llama_fn(role_prompt)
     cot_response = llama_fn(cot_prompt)
     
-    # Generate evaluation of the responses
-    evaluator_prompt = PromptTemplates.evaluator_prompt(
+    # Generate evaluation
+    evaluator_prompt = generate_evaluator_prompt(
         combined_text=combined_text,
         fewshot_response=few_shot_response,
         role_response=role_response,
         cot_response=cot_response,
-        evaluation_criteria=custom_evaluation_criteria
+        evaluation_criteria=custom_evaluation_criteria,
+        domain=domain
     )
     evaluation_report = llama_fn(evaluator_prompt)
     
+    # Log experiment data
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
     

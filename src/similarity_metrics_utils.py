@@ -1,4 +1,10 @@
+import warnings
+# Suppress specific RoBERTa warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers.modeling_utils")
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.roberta.modeling_roberta")
+
 import numpy as np
+import torch
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from bert_score import score as bert_score
@@ -8,28 +14,32 @@ _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
 def get_cosine_similarity(current, previous):
+    """Calculate cosine similarity between current text and previous texts."""
     if not previous:
-        return None
+        return 0.0
     current_embedding = _embedding_model.encode([current])
     previous_embeddings = _embedding_model.encode(previous)
     similarities = cosine_similarity(current_embedding, previous_embeddings)[0]
-    return np.mean(similarities)
+    return float(np.mean(similarities))
 
 
 def get_self_bleu(candidate, others):
+    """Calculate BLEU score between current text and previous texts."""
     if not others:
-        return None
+        return 0.0
     smooth = SmoothingFunction().method1
     scores = [sentence_bleu([o.split()], candidate.split(), smoothing_function=smooth) for o in others]
-    return np.mean(scores)
+    return float(np.mean(scores))
 
 
 def get_bertscore(candidate, others, lang="en"):
+    """Calculate BERTScore between current text and previous texts."""
     if not others:
-        return None
+        return 0.0
     cands = [candidate] * len(others)
     P, R, F1 = bert_score(cands, others, lang=lang, verbose=False)
-    return float(np.mean(F1))
+    # Convert PyTorch tensor to float
+    return float(torch.mean(F1).item())
 
 
 def get_llm_similarity_category(llama_fn, prompt, completion, previous):

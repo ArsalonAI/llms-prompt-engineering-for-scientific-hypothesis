@@ -48,7 +48,7 @@ def init_wandb(project_name=None, entity_name=None, model_name=None, table_colum
 
 def log_experiment_to_wandb(timestamp, experiment_data):
     """
-    Log experiment data to the wandb table.
+    Log experiment data to the wandb table and print to terminal.
 
     Args:
         timestamp (str): Timestamp of the experiment.
@@ -56,6 +56,20 @@ def log_experiment_to_wandb(timestamp, experiment_data):
     """
     if wandb.run and _experiments_table:
         try:
+            # Print results to terminal
+            print("\n=== Experiment Results ===")
+            print(f"Timestamp: {timestamp}")
+            print(f"Experiment Type: {experiment_data[1]}")
+            print(f"Prompt: {experiment_data[3]}")
+            print(f"Completion: {experiment_data[4]}")
+            print(f"Elapsed Time: {experiment_data[5]}s")
+            print(f"Model: {experiment_data[6]}")
+            print(f"Run ID: {experiment_data[7]}")
+            print(f"Cosine Similarity: {experiment_data[8]}")
+            print(f"LLM Similarity Category: {experiment_data[9]}")
+            print(f"LLM Similarity Score: {experiment_data[10]}")
+            print("========================\n")
+
             # All elements except the last are added to the wandb table
             _experiments_table.add_data(*experiment_data[:-1])
             wandb.log({"experiments": _experiments_table})
