@@ -1,5 +1,4 @@
 # main.py
-from experiment_schemas import LLM_IDEA_GENERATION_COLUMNS
 from experiment_runner_templates import run_idea_generation_batch
 from completion_util import llama_3_3_70B_completion
 from experiment_tracker import ExperimentTracker
@@ -35,7 +34,7 @@ with ExperimentTracker() as tracker:
         }
     )
 
-    # Start the experiment
+    # Start the experiment with all configuration
     tracker.start_experiment(
         experiment_name="llm-scientific-hypothesis-generation",
         experiment_type="idea_generation",
@@ -43,10 +42,10 @@ with ExperimentTracker() as tracker:
         config={
             "domain": "genetic engineering",
             "focus_area": "CRISPR gene editing",
-            "num_ideas": 50,
+            "num_ideas": 5,
             "system_prompt": system_prompt,
             "main_prompt": main_prompt,
-            "evaluation_criteria": evaluator.get_evaluation_criteria()  # Add evaluator config if available
+            "evaluation_criteria": evaluator.get_evaluation_criteria()
         }
     )
     
@@ -56,7 +55,6 @@ with ExperimentTracker() as tracker:
         llama_fn=lambda p: llama_3_3_70B_completion(p, system_prompt=system_prompt),
         model_name="llama-3-3-70b",
         run_id="crispr_gene_editing_001",
-        num_ideas=50,
         quality_evaluator=evaluator.evaluate_hypothesis,
         tracker=tracker
     )

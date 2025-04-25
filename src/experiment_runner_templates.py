@@ -1,8 +1,8 @@
 import time
 from datetime import datetime
 from similarity_metrics_utils import get_cosine_similarity, get_self_bleu, get_bertscore
-from wandb_utils import log_experiment_to_wandb
-from typing import Optional, List, Callable
+from local_logger import LocalExperimentLogger
+from typing import Optional, List, Callable, Dict, Any
 from prompts.types import FewShotExample, EvaluationCriteria
 from prompts.few_shot_prompts import generate_few_shot_prompt
 from prompts.role_based_prompts import generate_role_based_prompt, generate_expert_critique_prompt
@@ -10,71 +10,90 @@ from prompts.chain_of_thought_prompts import generate_cot_prompt
 from prompts.evaluator_prompts import generate_evaluator_prompt
 from experiment_tracker import ExperimentTracker
 
-
+# Initialize the local logger
+_local_logger = LocalExperimentLogger()
 _previous_ideas = []
 
 def run_idea_generation_batch(
     prompt: str,
-    llama_fn: Callable,
+    llama_fn: callable,
     model_name: str,
-    run_id: Optional[str] = None,
-    num_ideas: int = 10,
-    quality_evaluator: Optional[Callable] = None,
-    tracker: Optional[ExperimentTracker] = None
-):
+    run_id: str,
+    quality_evaluator: callable,
+    tracker: 'ExperimentTracker',
+    num_ideas: int = 5  # Default to 5 if not specified
+) -> List[Dict[str, Any]]:
     """
-    Run a batch of idea generations and evaluations.
+    Run a batch of idea generations and track results.
     
     Args:
         prompt: The prompt to use for generation
-        llama_fn: Function to call the language model
+        llama_fn: Function to call for LLM completion
         model_name: Name of the model being used
-        run_id: Optional identifier for the experiment run
-        num_ideas: Number of ideas to generate
-        quality_evaluator: Optional function to evaluate idea quality
-        tracker: Optional ExperimentTracker instance for logging results
+        run_id: Unique identifier for this run
+        quality_evaluator: Function to evaluate idea quality
+        tracker: ExperimentTracker instance
+        num_ideas: Number of ideas to generate (defaults to 5)
     """
-    global _previous_ideas
-    
-    # Generate ideas
-    for _ in range(num_ideas):
-        # Generate and evaluate idea
-        idea = llama_fn(prompt)
-        evaluation_results = quality_evaluator(idea) if quality_evaluator else {"is_accepted": True}
+    results = []
+    for i in range(num_ideas):
+        # Generate idea
+        response = llama_fn(prompt)
+        
+        # Evaluate quality
+        quality_score = quality_evaluator(response)
         
         # Calculate similarity metrics
-        cosine_sim = get_cosine_similarity(idea, _previous_ideas)
-        self_bleu_score = get_self_bleu(idea, _previous_ideas)
-        bert_score = get_bertscore(idea, _previous_ideas)
+        cosine_similarity = get_cosine_similarity(response, [idea["idea"] for idea in _previous_ideas]) if _previous_ideas else 0.0
+        self_bleu = get_self_bleu(response, [idea["idea"] for idea in _previous_ideas]) if _previous_ideas else 1.0
+        bertscore = get_bertscore(response, [idea["idea"] for idea in _previous_ideas]) if _previous_ideas else 1.0
         
-        # Track for future similarity comparisons
-        _previous_ideas.append(idea)
-        
-        # Format run identifier
-        run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
-        
-        # Create experiment data
-        result_data = {
-            "run_id": run_identifier,
-            "idea": idea,
+        # Create result entry
+        result = {
+            "run_id": f"{run_id}_{i+1}",
+            "idea": response,
             "batch_prompt": prompt,
-            "judged_quality": evaluation_results.get("evaluation", ""),
-            "is_pruned": not evaluation_results.get("is_accepted", True),
-            "cosine_sim": f"{cosine_sim:.3f}",
-            "self_bleu": f"{self_bleu_score:.3f}",
-            "bertscore": f"{bert_score:.3f}",
-            "metadata": {
-                "model": model_name,
-                "elapsed_time": time.time(),
-                "evaluation_full": evaluation_results
-            }
+            "judged_quality": quality_score,
+            "model": model_name,
+            "cosine_similarity": cosine_similarity,
+            "self_bleu": self_bleu,
+            "bertscore": bertscore
         }
         
-        # Log result using tracker if provided
-        if tracker:
-            tracker.log_result(result_data)
+        # Add to previous ideas for future similarity calculations
+        _previous_ideas.append(result)
+        
+        # Create experiment data for local logging
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        experiment_data = [
+            timestamp, result["run_id"], "batch_generation", None,
+            [], response, cosine_similarity, self_bleu,
+            prompt, None, None,
+            {
+                "model": model_name,
+                "judged_quality": quality_score,
+                "cosine_similarity": cosine_similarity,
+                "self_bleu": self_bleu,
+                "bertscore": bertscore
+            }
+        ]
+        
+        # Log to local HTML
+        _local_logger.log_experiment(experiment_data)
+        
+        # Log result to tracker
+        tracker.log_result(result)
+        results.append(result)
+        
+        # Print minimal console output
+        print(f"[STEP] Run ID: {result['run_id']} | "
+              f"Quality: {quality_score} | "
+              f"Metrics: cos_sim={cosine_similarity:.3f}, "
+              f"self_bleu={self_bleu:.3f}, "
+              f"bert_score={bertscore:.3f}")
     
-    return _previous_ideas  # Return the list of ideas generated
+    print(f"[INFO] Batch results logged to: {_local_logger.get_experiment_url()}")
+    return results
 
 
 def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abstracts, llama_fn, model_name, prompt, run_id=None):
@@ -98,7 +117,10 @@ def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abst
         }
     ]
 
-    log_experiment_to_wandb(timestamp, experiment_data)
+    # Log to local HTML instead of W&B
+    _local_logger.log_experiment(experiment_data)
+    print(f"[INFO] Results logged to: {_local_logger.get_experiment_url()}")
+    
     return generated_idea
 
 def run_prompt_engineering_experiment(
@@ -162,26 +184,29 @@ def run_prompt_engineering_experiment(
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
     
-    experiment_data = {
-        "timestamp": timestamp,
-        "run_id": run_identifier,
-        "experiment_type": "prompt_engineering",
-        "model_name": model_name,
-        "domain": domain,
-        "combined_text": combined_text,
-        "few_shot_response": few_shot_response,
-        "role_response": role_response,
-        "cot_response": cot_response,
-        "evaluation_report": evaluation_report,
-        "prompts": {
-            "few_shot": few_shot_prompt,
-            "role_based": role_prompt,
-            "chain_of_thought": cot_prompt,
-            "evaluator": evaluator_prompt
+    experiment_data = [
+        timestamp, run_identifier, "prompt_engineering", None,
+        [], None, 0.0, 0.0,  # Placeholders for reference data and similarities
+        combined_text, None, domain,
+        {
+            "model_name": model_name,
+            "domain": domain,
+            "few_shot_response": few_shot_response,
+            "role_response": role_response,
+            "cot_response": cot_response,
+            "evaluation_report": evaluation_report,
+            "prompts": {
+                "few_shot": few_shot_prompt,
+                "role_based": role_prompt,
+                "chain_of_thought": cot_prompt,
+                "evaluator": evaluator_prompt
+            }
         }
-    }
+    ]
     
-    log_experiment_to_wandb(timestamp, experiment_data)
+    # Log to local HTML
+    _local_logger.log_experiment(experiment_data)
+    print(f"[INFO] Results logged to: {_local_logger.get_experiment_url()}")
     
     return {
         "few_shot_response": few_shot_response,
