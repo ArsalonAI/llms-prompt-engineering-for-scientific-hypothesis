@@ -8,6 +8,7 @@ from prompts.few_shot_prompts import generate_few_shot_prompt
 from prompts.role_based_prompts import generate_role_based_prompt, generate_expert_critique_prompt
 from prompts.chain_of_thought_prompts import generate_cot_prompt
 from prompts.evaluator_prompts import generate_evaluator_prompt
+from experiment_tracker import ExperimentTracker
 
 
 _previous_ideas = []
@@ -18,7 +19,8 @@ def run_idea_generation_batch(
     model_name: str,
     run_id: Optional[str] = None,
     num_ideas: int = 10,
-    quality_evaluator: Optional[Callable] = None
+    quality_evaluator: Optional[Callable] = None,
+    tracker: Optional[ExperimentTracker] = None
 ):
     """
     Run a batch of idea generations and evaluations.
@@ -30,6 +32,7 @@ def run_idea_generation_batch(
         run_id: Optional identifier for the experiment run
         num_ideas: Number of ideas to generate
         quality_evaluator: Optional function to evaluate idea quality
+        tracker: Optional ExperimentTracker instance for logging results
     """
     global _previous_ideas
     
@@ -50,25 +53,26 @@ def run_idea_generation_batch(
         # Format run identifier
         run_identifier = f"run_{run_id}" if run_id else datetime.now().strftime('%H%M%S_%f')
         
-        # Create experiment data matching the schema exactly
-        experiment_data = [
-            run_identifier,                                    # run_id
-            idea,                                             # idea
-            prompt,                                           # batch_prompt
-            evaluation_results.get("evaluation", ""),         # judged_quality
-            not evaluation_results.get("is_accepted", True),  # is_pruned (inverted is_accepted)
-            f"{cosine_sim:.3f}",                             # cosine_sim
-            f"{self_bleu_score:.3f}",                        # self_bleu
-            f"{bert_score:.3f}",                             # bertscore
-            {  # Additional metrics for wandb logging
+        # Create experiment data
+        result_data = {
+            "run_id": run_identifier,
+            "idea": idea,
+            "batch_prompt": prompt,
+            "judged_quality": evaluation_results.get("evaluation", ""),
+            "is_pruned": not evaluation_results.get("is_accepted", True),
+            "cosine_sim": f"{cosine_sim:.3f}",
+            "self_bleu": f"{self_bleu_score:.3f}",
+            "bertscore": f"{bert_score:.3f}",
+            "metadata": {
                 "model": model_name,
                 "elapsed_time": time.time(),
                 "evaluation_full": evaluation_results
             }
-        ]
+        }
         
-        # Log to wandb
-        log_experiment_to_wandb(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), experiment_data)
+        # Log result using tracker if provided
+        if tracker:
+            tracker.log_result(result_data)
     
     return _previous_ideas  # Return the list of ideas generated
 

@@ -6,6 +6,17 @@ from prompts.evaluator_prompts import judge_scientific_hypothesis_quality
 class HypothesisEvaluator:
     def __init__(self):
         self.previous_hypotheses: List[str] = []
+        self._evaluation_criteria = {
+            "testability": "Can this hypothesis be tested through experimental methods?",
+            "novelty": "Does this hypothesis propose something genuinely new to the field?",
+            "scientific_grounding": "Is it well-grounded in existing scientific knowledge?",
+            "specificity": "Is the hypothesis clear and specific about what it proposes?",
+            "potential_impact": "If proven true, would this hypothesis significantly advance our understanding?"
+        }
+    
+    def get_evaluation_criteria(self) -> Dict[str, str]:
+        """Return the evaluation criteria used by this evaluator."""
+        return self._evaluation_criteria.copy()
     
     def evaluate_hypothesis(self, hypothesis: str, system_prompt: Optional[str] = None) -> Dict:
         """
