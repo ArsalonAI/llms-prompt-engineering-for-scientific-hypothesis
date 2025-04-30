@@ -42,7 +42,7 @@ with ExperimentTracker() as tracker:
         config={
             "domain": "genetic engineering",
             "focus_area": "CRISPR gene editing",
-            "num_ideas": 5,
+            "num_ideas": 25,
             "system_prompt": system_prompt,
             "main_prompt": main_prompt,
             "evaluation_criteria": evaluator.get_evaluation_criteria()
@@ -56,6 +56,10 @@ with ExperimentTracker() as tracker:
         model_name="llama-3-3-70b",
         run_id="crispr_gene_editing_001",
         quality_evaluator=evaluator.evaluate_hypothesis,
-        tracker=tracker
+        tracker=tracker,
+        context={
+            'abstract': paper_content['abstract'],
+            'methods': paper_content['methods']
+        }
     )
 

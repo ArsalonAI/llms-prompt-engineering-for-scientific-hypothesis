@@ -90,22 +90,24 @@ class ExperimentTracker:
         # Create a formatted version of the DataFrame for display
         display_df = self._results_df.copy()
         
-        # Ensure required columns exist
-        required_cols = ['step', 'run_id', 'evaluation', 'evaluation_full']
-        for col in required_cols:
-            if col not in display_df.columns:
-                display_df[col] = None
-        
-        # Format numeric columns
-        numeric_cols = ['cosine_similarity', 'self_bleu', 'bertscore']
+        # Format numeric columns to 3 decimal places
+        numeric_cols = [
+            'avg_cosine_similarity', 'avg_self_bleu', 'avg_bertscore',
+            'context_cosine', 'context_self_bleu', 'context_bertscore'
+        ]
         for col in numeric_cols:
             if col in display_df.columns:
                 display_df[col] = display_df[col].astype(float).round(3)
         
-        # Create the table
+        # Create the table with separate sections for different metrics
         fig = go.Figure(data=[go.Table(
             header=dict(
-                values=['Step', 'Run ID', 'Evaluation', 'Metrics', 'Full Analysis'],
+                values=[
+                    'Step', 'Run ID', 'Evaluation',
+                    'Similarity to Original Context',
+                    'Similarity to Other Ideas',
+                    'Full Analysis'
+                ],
                 fill_color='royalblue',
                 align='left',
                 font=dict(color='white', size=12)
@@ -115,10 +117,21 @@ class ExperimentTracker:
                     display_df['step'].fillna('N/A'),
                     display_df['run_id'].fillna('N/A'),
                     display_df['evaluation'].fillna('N/A'),
-                    display_df.apply(lambda row: f"cos_sim: {row.get('cosine_similarity', 0.0):.3f}<br>"
-                                               f"self_bleu: {row.get('self_bleu', 0.0):.3f}<br>"
-                                               f"bert: {row.get('bertscore', 0.0):.3f}", axis=1),
-                    display_df['evaluation_full'].fillna('N/A').apply(lambda x: x.replace('\n', '<br>') if pd.notnull(x) else '')
+                    # Context similarities
+                    display_df.apply(lambda row: (
+                        f"cos: {row.get('context_cosine', 0.0):.3f}<br>"
+                        f"bleu: {row.get('context_self_bleu', 0.0):.3f}<br>"
+                        f"bert: {row.get('context_bertscore', 0.0):.3f}"
+                    ), axis=1),
+                    # Pairwise similarities
+                    display_df.apply(lambda row: (
+                        f"cos: {row.get('avg_cosine_similarity', 0.0):.3f}<br>"
+                        f"bleu: {row.get('avg_self_bleu', 0.0):.3f}<br>"
+                        f"bert: {row.get('avg_bertscore', 0.0):.3f}"
+                    ), axis=1),
+                    display_df['evaluation_full'].fillna('N/A').apply(
+                        lambda x: x.replace('\n', '<br>') if pd.notnull(x) else ''
+                    )
                 ],
                 fill_color='lavender',
                 align='left',
@@ -128,173 +141,207 @@ class ExperimentTracker:
         
         fig.update_layout(
             title="Experiment Results",
-            height=400 * (len(display_df) // 10 + 1),  # Adjust height based on number of rows
+            height=400 * (len(display_df) // 10 + 1),
             margin=dict(t=30, l=10, r=10, b=10)
+        )
+        
+        return fig
+
+    def _create_heatmap(self, metric_name: str) -> go.Figure:
+        """Create a heatmap visualization for pairwise comparisons."""
+        if self._results_df is None or len(self._results_df) == 0:
+            return None
+            
+        # Extract pairwise comparisons
+        matrix = []
+        run_ids = []
+        
+        for _, row in self._results_df.iterrows():
+            run_ids.append(row['run_id'])
+            row_values = []
+            
+            # Get pairwise similarities for this idea
+            pairwise = row.get('pairwise_similarities', {}).get(metric_name, [])
+            
+            # Create row in matrix
+            for other_id in run_ids[:-1]:  # Exclude current run_id
+                score = next(
+                    (item['score'] for item in pairwise if item['compared_to'] == other_id),
+                    None
+                )
+                row_values.append(score if score is not None else 0.0)
+            
+            # Add 1.0 for self-comparison
+            row_values.append(1.0)
+            
+            # Pad with zeros for future comparisons
+            row_values.extend([0.0] * (len(self._results_df) - len(row_values)))
+            
+            matrix.append(row_values)
+        
+        # Create heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=matrix,
+            x=run_ids,
+            y=run_ids,
+            colorscale='Viridis',
+            zmin=0,
+            zmax=1
+        ))
+        
+        fig.update_layout(
+            title=f"Pairwise {metric_name.replace('_', ' ').title()} Comparison",
+            xaxis_title="Idea",
+            yaxis_title="Idea",
+            width=600,
+            height=600
+        )
+        
+        return fig
+
+    def _create_context_similarity_plot(self) -> go.Figure:
+        """Create a plot showing similarities with original context over time."""
+        if self._results_df is None or len(self._results_df) == 0:
+            return None
+            
+        fig = go.Figure()
+        
+        metrics = [
+            ('context_cosine', 'Cosine'),
+            ('context_self_bleu', 'Self-BLEU'),
+            ('context_bertscore', 'BERTScore')
+        ]
+        
+        for col, name in metrics:
+            if col in self._results_df.columns:
+                fig.add_trace(go.Scatter(
+                    x=self._results_df['run_id'],
+                    y=self._results_df[col],
+                    name=name,
+                    mode='lines+markers'
+                ))
+        
+        fig.update_layout(
+            title="Similarity to Original Context",
+            xaxis_title="Idea",
+            yaxis_title="Similarity Score",
+            yaxis_range=[0, 1],
+            showlegend=True
         )
         
         return fig
         
     def _create_dashboard_html(self, experiment_dir: str, metadata: dict, summary: dict):
         """Create a comprehensive HTML dashboard."""
-        try:
-            dashboard_path = os.path.join(experiment_dir, "dashboard.html")
-            print(f"[DEBUG] Creating dashboard at: {dashboard_path}")
-            
-            # Create HTML content
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Experiment Results - {metadata['name']}</title>
-                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-                <style>
-                    body {{
-                        font-family: Arial, sans-serif;
-                        margin: 0;
-                        padding: 20px;
-                        background-color: #f5f5f5;
-                    }}
-                    .container {{
-                        max-width: 1200px;
-                        margin: 0 auto;
-                        background-color: white;
-                        padding: 20px;
-                        border-radius: 8px;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    }}
-                    h1, h2 {{
-                        color: #2c3e50;
-                        border-bottom: 2px solid #3498db;
-                        padding-bottom: 10px;
-                    }}
-                    .metadata {{
-                        background-color: #f8f9fa;
-                        padding: 15px;
-                        border-radius: 5px;
-                        margin: 20px 0;
-                    }}
-                    .summary {{
-                        display: grid;
-                        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-                        gap: 20px;
-                        margin: 20px 0;
-                    }}
-                    .metric-card {{
-                        background-color: #ffffff;
-                        padding: 15px;
-                        border-radius: 5px;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                    }}
-                    .plot-container {{
-                        margin: 20px 0;
-                        padding: 15px;
-                        background-color: white;
-                        border-radius: 5px;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                    }}
-                    .no-data {{
-                        text-align: center;
-                        padding: 20px;
-                        color: #666;
-                        font-style: italic;
-                    }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>Experiment Results Dashboard</h1>
-                    
-                    <div class="metadata">
-                        <h2>Experiment Details</h2>
-                        <p><strong>Name:</strong> {metadata['name']}</p>
-                        <p><strong>Type:</strong> {metadata['type']}</p>
-                        <p><strong>Model:</strong> {metadata['model']}</p>
-                        <p><strong>Start Time:</strong> {metadata['start_time']}</p>
-                        <p><strong>End Time:</strong> {metadata['end_time']}</p>
-                    </div>
-
-                    <h2>Summary Statistics</h2>
-                    <div class="summary">
-                        <div class="metric-card">
-                            <h3>Total Ideas Generated</h3>
-                            <p>{summary['Total Ideas']}</p>
-                        </div>
-            """
-            
-            # Add metric cards
-            for metric, stats in summary['Metrics'].items():
-                html_content += f"""
-                        <div class="metric-card">
-                            <h3>{metric}</h3>
-                            <p>Mean: {stats['mean']:.3f}</p>
-                            <p>Median: {stats['median']:.3f}</p>
-                            <p>Std: {stats['std']:.3f}</p>
-                        </div>
-                """
-            
-            html_content += """
-                    </div>
-                    
-                    <h2>Results Table</h2>
-                    <div class="plot-container" id="results-table"></div>
-                    
-                    <h2>Metric Distributions</h2>
-            """
-            
-            # Add distribution plots
-            metrics = ['cosine_similarity', 'self_bleu', 'bertscore']
-            for metric in metrics:
-                html_content += f"""
-                    <div class="plot-container" id="{metric}-plot">
-                        <div class="no-data" id="{metric}-no-data" style="display: none;">
-                            No data available for {metric}
-                        </div>
-                    </div>
-                """
-            
-            html_content += """
+        dashboard_path = os.path.join(experiment_dir, "dashboard.html")
+        
+        # Create HTML content
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Experiment Results - {metadata['name']}</title>
+            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                }}
+                .container {{
+                    max-width: 1400px;
+                    margin: 0 auto;
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }}
+                h1, h2 {{
+                    color: #2c3e50;
+                    border-bottom: 2px solid #3498db;
+                    padding-bottom: 10px;
+                }}
+                .metadata {{
+                    background-color: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 20px 0;
+                }}
+                .plot-container {{
+                    margin: 20px 0;
+                    padding: 15px;
+                    background-color: white;
+                    border-radius: 5px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }}
+                .plot-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+                    gap: 20px;
+                    margin: 20px 0;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Experiment Results Dashboard</h1>
+                
+                <div class="metadata">
+                    <h2>Experiment Details</h2>
+                    <p><strong>Name:</strong> {metadata['name']}</p>
+                    <p><strong>Type:</strong> {metadata['type']}</p>
+                    <p><strong>Model:</strong> {metadata['model']}</p>
+                    <p><strong>Start Time:</strong> {metadata['start_time']}</p>
+                    <p><strong>End Time:</strong> {metadata['end_time']}</p>
                 </div>
-                <script>
-            """
+
+                <h2>Results Table</h2>
+                <div class="plot-container" id="results-table"></div>
+                
+                <h2>Context Similarity Over Time</h2>
+                <div class="plot-container" id="context-similarity"></div>
+                
+                <h2>Pairwise Similarity Heatmaps</h2>
+                <div class="plot-grid">
+                    <div class="plot-container" id="cosine-heatmap"></div>
+                    <div class="plot-container" id="bleu-heatmap"></div>
+                    <div class="plot-container" id="bert-heatmap"></div>
+                </div>
+            </div>
+            <script>
+        """
+        
+        # Add the table plot
+        table_fig = self._create_results_table()
+        if table_fig:
+            html_content += f"Plotly.newPlot('results-table', {table_fig.to_json()});\n"
+        
+        # Add context similarity plot
+        context_fig = self._create_context_similarity_plot()
+        if context_fig:
+            html_content += f"Plotly.newPlot('context-similarity', {context_fig.to_json()});\n"
+        
+        # Add heatmaps
+        for metric, div_id in [
+            ('cosine', 'cosine-heatmap'),
+            ('self_bleu', 'bleu-heatmap'),
+            ('bertscore', 'bert-heatmap')
+        ]:
+            heatmap = self._create_heatmap(metric)
+            if heatmap:
+                html_content += f"Plotly.newPlot('{div_id}', {heatmap.to_json()});\n"
+        
+        html_content += """
+            </script>
+        </body>
+        </html>
+        """
+        
+        with open(dashboard_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
             
-            # Add the table plot
-            table_fig = self._create_results_table()
-            if table_fig:
-                html_content += f"Plotly.newPlot('results-table', {table_fig.to_json()});\n"
-            else:
-                html_content += """
-                    document.getElementById('results-table').innerHTML = '<div class="no-data">No results available</div>';
-                """
-            
-            # Add distribution plots
-            for metric in metrics:
-                fig = self._create_distribution_plot(metric)
-                if fig:
-                    html_content += f"Plotly.newPlot('{metric}-plot', {fig.to_json()});\n"
-                else:
-                    html_content += f"""
-                        document.getElementById('{metric}-no-data').style.display = 'block';
-                    """
-            
-            html_content += """
-                </script>
-            </body>
-            </html>
-            """
-            
-            print(f"[DEBUG] Writing dashboard HTML file ({len(html_content)} bytes)")
-            with open(dashboard_path, 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            
-            print(f"[DEBUG] Dashboard created successfully")
-            return dashboard_path
-        except Exception as e:
-            print(f"[ERROR] Failed to create dashboard HTML: {str(e)}")
-            print("[ERROR] Error details:")
-            import traceback
-            traceback.print_exc()
-            # Re-raise to be caught by the outer try-catch
-            raise
+        return dashboard_path
     
     def start_experiment(self, 
                         experiment_name: str, 
@@ -307,16 +354,20 @@ class ExperimentTracker:
         
         # Initialize results DataFrame with all required columns
         self._results_df = pd.DataFrame(columns=[
-            'step',  # Add step column
+            'step',
             'run_id', 
             'idea', 
             'batch_prompt', 
-            'evaluation',  # Add evaluation column
-            'evaluation_full',  # Add evaluation_full column
-            'judged_quality',
-            'cosine_similarity', 
-            'self_bleu', 
-            'bertscore', 
+            'evaluation',
+            'evaluation_full',
+            # Pairwise similarity metrics (between generated ideas)
+            'avg_cosine_similarity',
+            'avg_self_bleu',
+            'avg_bertscore',
+            # Context similarity metrics (with original text)
+            'context_cosine',
+            'context_self_bleu',
+            'context_bertscore',
             'timestamp'
         ])
         
@@ -340,6 +391,40 @@ class ExperimentTracker:
         
         print(f"[INFO] Started experiment: {experiment_name}")
     
+    def _calculate_similarity_stats(self, metric_data: pd.Series) -> Dict[str, float]:
+        """Helper function to calculate statistics for a similarity metric."""
+        data = pd.to_numeric(metric_data, errors='coerce').dropna()
+        if len(data) > 0:
+            return {
+                "mean": float(data.mean()),
+                "median": float(data.median()),
+                "std": float(data.std()),
+                "min": float(data.min()),
+                "max": float(data.max())
+            }
+        return {
+            "mean": 0.0,
+            "median": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0
+        }
+
+    def _get_similarity_summary(self, similarity_type: str) -> Dict[str, Dict[str, float]]:
+        """Helper function to get summary statistics for either context or pairwise similarities."""
+        metrics = {
+            'context': ['context_cosine', 'context_self_bleu', 'context_bertscore'],
+            'pairwise': ['avg_cosine_similarity', 'avg_self_bleu', 'avg_bertscore']
+        }
+        
+        summary = {}
+        for metric in metrics[similarity_type]:
+            if metric in self._results_df.columns:
+                display_name = metric.replace('context_', '').replace('avg_', '')
+                summary[display_name] = self._calculate_similarity_stats(self._results_df[metric])
+        
+        return summary
+
     def log_result(self, result: Dict[str, Any]):
         """Log a result for the current experiment."""
         if self.current_experiment is None:
@@ -388,13 +473,15 @@ class ExperimentTracker:
         
         self.current_experiment['end_time'] = datetime.now().isoformat()
         
-        # Create experiment directory with absolute path
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Create experiment directory with absolute path and detailed timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')  # Format: YYYYMMDD_HHMMSS
         experiment_dir = os.path.abspath(os.path.join(
             self.output_dir,
             f"{self.current_experiment['name']}_{timestamp}"
         ))
         os.makedirs(experiment_dir, exist_ok=True)
+        
+        print(f"\n[INFO] Creating experiment directory: {os.path.basename(experiment_dir)}")
         
         # Save experiment metadata
         metadata = {
@@ -412,28 +499,9 @@ class ExperimentTracker:
         # Create summary statistics
         summary = {
             "Total Ideas": len(self._results_df),
-            "Metrics": {}
+            "Context Similarities": self._get_similarity_summary('context'),
+            "Pairwise Similarities": self._get_similarity_summary('pairwise')
         }
-        
-        # Calculate metrics for both summary and detailed results
-        metrics = ['cosine_similarity', 'self_bleu', 'bertscore']
-        for metric in metrics:
-            if metric in self._results_df.columns:
-                data = pd.to_numeric(self._results_df[metric], errors='coerce').dropna()
-                if len(data) > 0:
-                    metric_stats = {
-                        "mean": float(data.mean()),
-                        "median": float(data.median()),
-                        "std": float(data.std())
-                    }
-                    summary["Metrics"][metric] = metric_stats
-                else:
-                    metric_stats = {
-                        "mean": 0.0,
-                        "median": 0.0,
-                        "std": 0.0
-                    }
-                    summary["Metrics"][metric] = metric_stats
         
         # Save summary.json (quick overview)
         summary_path = os.path.join(experiment_dir, "summary.json")
@@ -461,7 +529,16 @@ class ExperimentTracker:
             print("\n" + "="*50)
             print("EXPERIMENT RESULTS SAVED!")
             print("="*50)
-            print(f"📁 Results Directory:\n   {experiment_dir}")
+            print(f"📁 Results Directory:")
+            print(f"   {experiment_dir}")
+            print(f"\n⏰ Experiment Timing:")
+            start_time = datetime.fromisoformat(self.current_experiment['start_time'])
+            end_time = datetime.fromisoformat(self.current_experiment['end_time'])
+            duration = end_time - start_time
+            print(f"   Start: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   End:   {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   Duration: {duration.total_seconds():.1f} seconds")
+            
             print("\n📊 Generated Files:")
             print(f"   1. metadata.json - Experiment configuration and timing")
             print(f"   2. summary.json  - Quick overview of metrics")
@@ -470,13 +547,31 @@ class ExperimentTracker:
             print(f"   5. dashboard.html - Interactive visualization")
             print("\n🌐 View Dashboard:")
             print(f"   File Protocol: file://{os.path.abspath(dashboard_path)}")
-            # Convert absolute path to relative web path
             web_path = os.path.relpath(dashboard_path, os.path.dirname(os.path.dirname(experiment_dir)))
             print(f"   HTTP Protocol: http://localhost:8000/{web_path}")
             print("\nQuick Start:")
             print("1. Start local server:  python -m http.server 8000")
             print("2. Open either URL in your browser")
             print("="*50 + "\n")
+            
+            # Print summary to console with both context and pairwise metrics
+            print("\n=== Experiment Summary ===")
+            print(f"Total Ideas Generated: {summary['Total Ideas']}")
+            
+            print("\nContext Similarities (with original text):")
+            for metric, stats in summary["Context Similarities"].items():
+                print(f"{metric}:")
+                print(f"  Mean: {stats['mean']:.3f}")
+                print(f"  Median: {stats['median']:.3f}")
+                print(f"  Std: {stats['std']:.3f}")
+            
+            print("\nPairwise Similarities (between generated ideas):")
+            for metric, stats in summary["Pairwise Similarities"].items():
+                print(f"{metric}:")
+                print(f"  Mean: {stats['mean']:.3f}")
+                print(f"  Median: {stats['median']:.3f}")
+                print(f"  Std: {stats['std']:.3f}")
+            
         except Exception as e:
             print("\n" + "="*50)
             print("[ERROR] Dashboard Creation Failed!")
@@ -493,15 +588,6 @@ class ExperimentTracker:
             import traceback
             print(traceback.format_exc())
             print("="*50 + "\n")
-        
-        # Print summary to console
-        print("\n=== Experiment Summary ===")
-        print(f"Total Ideas Generated: {summary['Total Ideas']}")
-        for metric, stats in summary["Metrics"].items():
-            print(f"{metric}:")
-            print(f"  Mean: {stats['mean']:.3f}")
-            print(f"  Median: {stats['median']:.3f}")
-            print(f"  Std: {stats['std']:.3f}")
         
         # Reset experiment state
         self.current_experiment = None
