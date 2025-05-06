@@ -9,6 +9,7 @@ from prompts.chain_of_thought_prompts import generate_cot_prompt
 from prompts.evaluator_prompts import generate_evaluator_prompt
 from experiment_tracker import ExperimentTracker
 import pandas as pd
+import numpy as np
 
 def run_idea_generation_batch(
     prompt: str,
@@ -43,7 +44,6 @@ def run_idea_generation_batch(
         "self_bleu_scores": [],
         "bertscore_scores": [],
         "kde_values": {
-            "quality": {"x": [], "y": []},
             "cosine": {"x": [], "y": []},
             "self_bleu": {"x": [], "y": []},
             "bertscore": {"x": [], "y": []}
@@ -92,7 +92,6 @@ def run_idea_generation_batch(
         
         # Calculate KDE values for each metric
         for metric, values in [
-            ("quality", quality_scores),
             ("cosine", cosine_sims),
             ("self_bleu", self_bleu_scores),
             ("bertscore", bertscore_scores)
@@ -103,19 +102,56 @@ def run_idea_generation_batch(
                 results["kde_values"][metric]["y"].extend(y_kde.tolist())
     
     # Log results
-    tracker.log_result(run_id, {
+    # Calculate overall averages for pairwise similarities from the entire run
+    avg_pairwise_cosine = np.mean(results["cosine_similarities"]) if results["cosine_similarities"] else 0.0
+    avg_pairwise_self_bleu = np.mean(results["self_bleu_scores"]) if results["self_bleu_scores"] else 0.0
+    avg_pairwise_bertscore = np.mean(results["bertscore_scores"]) if results["bertscore_scores"] else 0.0
+
+    # Calculate context similarities (cosine) for all generated ideas against the main context
+    context_cosine_scores = []
+    context_self_bleu_scores = []
+    context_bertscore_scores = []
+
+    if context and results["ideas"]:
+        for idea_text in results["ideas"]:
+            context_cosine_scores.append(get_cosine_similarity(idea_text, [context]))
+            context_self_bleu_scores.append(get_self_bleu(idea_text, [context]))
+            context_bertscore_scores.append(get_bertscore(idea_text, [context]))
+            
+    avg_context_cosine = np.mean(context_cosine_scores) if context_cosine_scores else 0.0
+    avg_context_self_bleu = np.mean(context_self_bleu_scores) if context_self_bleu_scores else 0.0
+    avg_context_bertscore = np.mean(context_bertscore_scores) if context_bertscore_scores else 0.0
+
+    log_data = {
         "model": model_name,
         "prompt": prompt,
-        "context": context,
+        "context": context, # The original context string
         "num_ideas": num_ideas,
-        "quality_scores": results["quality_scores"],
+        "quality_scores": results["quality_scores"], # List of evaluations
+        
+        # Raw lists of pairwise scores (from all ideas generated in this run_idea_generation_batch call)
         "cosine_similarities": results["cosine_similarities"],
         "self_bleu_scores": results["self_bleu_scores"],
         "bertscore_scores": results["bertscore_scores"],
+        
+        # Overall averages of pairwise scores for this run
+        "avg_pairwise_cosine_similarity": avg_pairwise_cosine,
+        "avg_pairwise_self_bleu": avg_pairwise_self_bleu,
+        "avg_pairwise_bertscore": avg_pairwise_bertscore,
+        
+        # Context-based scores (raw list and average for cosine)
+        "context_cosine_scores_raw": context_cosine_scores, # List of context cosine for each idea
+        "avg_context_cosine_similarity": avg_context_cosine,
+        "context_self_bleu_scores_raw": context_self_bleu_scores,
+        "avg_context_self_bleu_similarity": avg_context_self_bleu,
+        "context_bertscore_scores_raw": context_bertscore_scores,
+        "avg_context_bertscore_similarity": avg_context_bertscore,
+        
         "kde_values": results["kde_values"]
-    })
+    }
+    tracker.log_result(run_id, log_data)
     
-    return results
+    return results # results still contains the raw lists like "cosine_similarities", and "kde_values" etc.
 
 def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abstracts, llama_fn, model_name, prompt, run_id=None):
     generated_idea = llama_fn(prompt)
@@ -143,6 +179,9 @@ def run_iterative_synthesis(source_paper_id, paper_title, domain, reference_abst
     
     return generated_idea
 
+
+# This experimental structure has been replaced by a better DOE (design of experiments)
+# will consider to remove this method in the future
 def run_prompt_engineering_experiment(
     combined_text: str,
     llama_fn: Callable,

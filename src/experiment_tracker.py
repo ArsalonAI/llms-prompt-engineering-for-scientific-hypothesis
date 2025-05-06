@@ -51,24 +51,46 @@ class ExperimentTracker:
         self._experiment_type = experiment_type
         self._step = 0
         
-        # Initialize results DataFrame with all required columns
-        self._results_df = pd.DataFrame(columns=[
-            'step',
-            'run_id', 
-            'idea', 
-            'batch_prompt', 
-            'evaluation',
-            'evaluation_full',
-            # Pairwise similarity metrics (between generated ideas)
-            'avg_cosine_similarity',
-            'avg_self_bleu',
-            'avg_bertscore',
-            # Context similarity metrics (with original text)
-            'context_cosine',
-            'context_self_bleu',
-            'context_bertscore',
-            'timestamp'
-        ])
+        # Define dtypes for a more robust DataFrame initialization
+        # This helps prevent dtype-related warnings during pd.concat in log_result
+        results_df_dtypes = {
+            'step': pd.Int64Dtype(), 
+            'run_id': str,
+            'idea': str,            
+            'batch_prompt': str,  
+            'evaluation': str,      
+            'evaluation_full': str, 
+            'avg_cosine_similarity': object, # Stores list of raw pairwise scores
+            'avg_self_bleu': object,       # Stores list of raw pairwise scores
+            'avg_bertscore': object,       # Stores list of raw pairwise scores
+            'context_cosine': object,       # Stores list of raw context scores for cosine
+            'context_self_bleu': object,    # Stores list of raw context scores for self_bleu
+            'context_bertscore': object,    # Stores list of raw context scores for bertscore
+            'timestamp': str, 
+            'model': str, 
+            'prompt': str, 
+            'context': str, # This is the main paper context string
+            'num_ideas': pd.Int64Dtype(), 
+            'quality_scores': object, 
+            # Raw score lists (if run_idea_generation_batch provides them with these exact keys for df population)
+            # These are the keys `log_result` will look for in the `result` dict to populate df_row.
+            # `run_idea_generation_batch` now provides `context_..._scores_raw` and the pairwise lists directly.
+            'cosine_similarities': object, # Raw pairwise list
+            'self_bleu_scores': object,    # Raw pairwise list
+            'bertscore_scores': object,    # Raw pairwise list
+            'context_cosine_scores_raw': object, 
+            'context_self_bleu_scores_raw': object, 
+            'context_bertscore_scores_raw': object, 
+            'has_kde_data': bool
+        }
+        # Initialize results DataFrame with all required columns and dtypes
+        self._results_df = pd.DataFrame(columns=list(results_df_dtypes.keys()))
+        for col, dtype in results_df_dtypes.items():
+            # Ensure column exists before trying to astype; pd.DataFrame(columns=...) creates them
+            if col in self._results_df.columns:
+                 self._results_df[col] = self._results_df[col].astype(dtype)
+            else: # Should not happen if columns=list(results_df_dtypes.keys())
+                 print(f"[WARN] Column '{col}' defined in dtypes but not in DataFrame during init.")
         
         # Ensure config has required fields
         self._config = config or {}
@@ -126,18 +148,46 @@ class ExperimentTracker:
             'model': result.get('model', 'N/A'),
             'prompt': result.get('prompt', 'N/A'),
             'context': result.get('context', 'N/A'),
-            'num_ideas': result.get('num_ideas', 0)
+            'num_ideas': result.get('num_ideas', 0),
+            
+            # Store the raw lists of scores directly. _calculate_similarity_stats will process these.
+            'avg_cosine_similarity': result.get('cosine_similarities'), # Was avg_pairwise_cosine_similarity
+            'avg_self_bleu': result.get('self_bleu_scores'),       # Was avg_pairwise_self_bleu
+            'avg_bertscore': result.get('bertscore_scores'),       # Was avg_pairwise_bertscore
+            
+            'context_cosine': result.get('context_cosine_scores_raw'), # List of context cosine for each idea
+            'context_self_bleu': result.get('context_self_bleu_scores_raw', []), # Expecting a list, default to empty if not present
+            'context_bertscore': result.get('context_bertscore_scores_raw', [])  # Expecting a list, default to empty if not present
         }
         
-        # Add arrays as separate columns when appropriate
-        for key in ['quality_scores', 'cosine_similarities', 'self_bleu_scores', 'bertscore_scores']:
-            if key in result:
-                df_row[key] = result[key]
+        # Add other raw lists and specific items like quality_scores, kde_values etc.
+        # This part populates columns that might be lists (e.g. quality_scores can be list of dicts)
+        # or other objects.
+        # The keys here should match column names defined in results_df_dtypes in start_experiment.
+        for key in ['quality_scores', 'has_kde_data', 'idea', 'batch_prompt', 'evaluation', 'evaluation_full']:
+            if key in result: # 'idea', 'batch_prompt', etc. might not be in a typical result dict for log_result
+                df_row[key] = result.get(key)
+            elif key == 'has_kde_data': # Ensure this column is always present
+                 df_row[key] = True if 'kde_values' in result else False
         
-        # Store KDE data separately to avoid bloating the DataFrame
-        if 'kde_values' in result:
-            df_row['has_kde_data'] = True
-        
+        # Note: 'cosine_similarities', 'self_bleu_scores', 'bertscore_scores', 'context_cosine_scores_raw'
+        # are now directly assigned to avg_cosine_similarity, avg_self_bleu, etc. above.
+        # If you need to keep *both* the averaged values (if calculated in run_idea_generation_batch)
+        # AND the raw lists under different column names in the CSV, the df_row and results_df_dtypes need adjustment.
+        # Current approach: the "avg_" columns now hold lists for _calculate_similarity_stats to process.
+
+        # The following loop for adding lists to df_row might be redundant if already handled above
+        # for key in ['quality_scores', 'cosine_similarities', 'self_bleu_scores', 'bertscore_scores', 'context_cosine_scores_raw']:
+        #     if key in result:
+        #         df_row[key] = result[key]
+
+        # Ensure all columns defined in dtypes are present in df_row, adding NaN if missing
+        # This is important if the `result` dict from run_idea_generation_batch is sparse.
+        expected_cols = self._results_df.columns # Get columns from the pre-defined DataFrame structure
+        for col in expected_cols:
+            if col not in df_row:
+                df_row[col] = np.nan # Or an appropriate default like [] for object types meant to be lists
+
         # Update DataFrame
         self._results_df = pd.concat([
             self._results_df,
@@ -147,13 +197,15 @@ class ExperimentTracker:
         # Print concise progress
         metrics_avg = {}
         # Only average metrics that are lists of numbers
-        for metric in ['cosine_similarities', 'self_bleu_scores', 'bertscore_scores']:
-            if metric in result and result[metric] and isinstance(result[metric], list):
-                # Filter out non-numeric types just in case, though they should be numbers
-                numeric_values = [v for v in result[metric] if isinstance(v, (int, float))]
+        for metric_key_in_result_dict, display_name in [
+            ('cosine_similarities', 'cosine'),
+            ('self_bleu_scores', 'self_bleu'),
+            ('bertscore_scores', 'bertscore')
+        ]:
+            if metric_key_in_result_dict in result and result[metric_key_in_result_dict] and isinstance(result[metric_key_in_result_dict], list):
+                numeric_values = [v for v in result[metric_key_in_result_dict] if isinstance(v, (int, float))]
                 if numeric_values:
-                    metrics_avg[metric.replace('_scores', '').replace('_similarities', '')] = \
-                        sum(numeric_values) / len(numeric_values)
+                    metrics_avg[display_name] = sum(numeric_values) / len(numeric_values)
         
         # Handle quality summary separately (e.g., count ACCEPT/PRUNE)
         quality_summary = "N/A"
@@ -182,7 +234,7 @@ class ExperimentTracker:
         self.current_experiment['end_time'] = datetime.now().isoformat()
         
         # Create experiment directory with absolute path and detailed timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')  # Format: YYYYMMDD_HHMMSS
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S') # New format: YYYY-MM-DD_HH-MM-SS
         experiment_dir = os.path.abspath(os.path.join(
             self.output_dir,
             f"{self.current_experiment['name']}_{timestamp}"
@@ -315,13 +367,32 @@ class ExperimentTracker:
     # Data Analysis Methods
     # =====================
     def _calculate_similarity_stats(self, metric_data: pd.Series) -> Dict[str, float]:
-        """Helper function to calculate statistics for a similarity metric."""
-        data = pd.to_numeric(metric_data, errors='coerce').dropna()
+        """Helper function to calculate statistics for a similarity metric.
+           The input Series is expected to contain one entry per run (log_result call),
+           and that entry is now a list of raw scores for that run.
+        """
+        # metric_data is a Series. If one log_result call, it has one element: the list of scores.
+        if metric_data.empty or metric_data.iloc[0] is None or not isinstance(metric_data.iloc[0], list) or not metric_data.iloc[0]:
+            # Handle cases where the data is missing, not a list, or an empty list for the first (and only) run.
+            return {
+                "mean": 0.0,
+                "median": 0.0,
+                "std": 0.0, # Or np.nan if preferred for undefined std of empty/single list
+                "min": 0.0,
+                "max": 0.0
+            }
+
+        # Extract the list of scores from the first (and typically only) element of the Series
+        scores_list = metric_data.iloc[0]
+        
+        # Ensure all elements in the list are numeric, coercing errors
+        data = pd.to_numeric(pd.Series(scores_list), errors='coerce').dropna()
+        
         if len(data) > 0:
             return {
                 "mean": float(data.mean()),
                 "median": float(data.median()),
-                "std": float(data.std()),
+                "std": float(data.std()) if len(data) > 1 else 0.0, # Std dev is NaN for < 2 elements, return 0.0 or np.nan
                 "min": float(data.min()),
                 "max": float(data.max())
             }
@@ -380,14 +451,35 @@ class ExperimentTracker:
     # =====================
     def _create_distribution_plot(self, metric_name: str) -> go.Figure:
         """Create a distribution plot for a given metric."""
-        if self._results_df is None or metric_name not in self._results_df.columns:
+        if self._results_df is None or self._results_df.empty or metric_name not in self._results_df.columns:
+            return None
+            
+        # metric_name refers to a column in _results_df (e.g., 'avg_cosine_similarity')
+        # This column now contains a list of scores in its first (and only) row.
+        # Or, for older compatibility, it might be a column like 'cosine_similarities' that holds the list.
+
+        scores_list = []
+        if not self._results_df[metric_name].empty:
+            first_item = self._results_df[metric_name].iloc[0]
+            if isinstance(first_item, list):
+                scores_list = first_item
+            elif pd.api.types.is_scalar(first_item) and pd.notna(first_item):
+                # Fallback if by some chance a scalar is logged - treat as single score
+                # Though _calculate_kde expects a series that can have variance.
+                # This case is unlikely with current logic but makes it robust.
+                scores_list = [first_item]
+            # If it's np.nan or other, scores_list remains empty.
+
+        if not scores_list:
+            # print(f"[Debug] No scores_list found or empty for metric '{metric_name}' in _create_distribution_plot")
             return None
             
         # Clean the data - remove None values and convert to float
-        data = pd.to_numeric(self._results_df[metric_name], errors='coerce').dropna()
+        data = pd.to_numeric(pd.Series(scores_list), errors='coerce').dropna()
         
-        if len(data) == 0:
-            return None
+        if len(data) < 2: # KDE needs at least 2 points to estimate density meaningfully (ideally more)
+            # print(f"[Debug] Not enough data points ({len(data)}) for KDE for metric '{metric_name}'")
+            return None # Or create a simple histogram without KDE for <2 points
             
         # Create histogram
         hist = go.Histogram(x=data, nbinsx=30, name=metric_name)
@@ -421,7 +513,8 @@ class ExperimentTracker:
         ))
         
         # Calculate and add KDE
-        x_kde, y_kde = self._calculate_kde(data)
+        # The _calculate_kde method itself expects a Series of numeric data
+        x_kde, y_kde = self._calculate_kde(data) # Pass the cleaned Series of scores
         if len(x_kde) > 0:
             # Normalize KDE to match histogram scale
             y_kde = y_kde * (max_y / y_kde.max())
@@ -443,30 +536,71 @@ class ExperimentTracker:
         return fig
         
     def _create_results_table(self) -> go.Figure:
-        """Create an interactive table visualization of results."""
-        if self._results_df is None or len(self._results_df) == 0:
+        """Create an interactive table visualization of results, showing individual ideas."""
+        if self._results_df is None or self._results_df.empty:
             return None
-            
-        # Create a formatted version of the DataFrame for display
-        display_df = self._results_df.copy()
+
+        # We expect one row in _results_df representing the entire experiment run's aggregated data (lists of scores).
+        run_data = self._results_df.iloc[0]
+
+        ideas_list = run_data.get('ideas', []) # Assuming 'ideas' key holds list of idea strings
+        quality_evals_list = run_data.get('quality_scores', []) # List of dicts from HypothesisEvaluator
         
-        # Format numeric columns to 3 decimal places
-        numeric_cols = [
-            'avg_cosine_similarity', 'avg_self_bleu', 'avg_bertscore',
-            'context_cosine', 'context_self_bleu', 'context_bertscore'
-        ]
-        for col in numeric_cols:
-            if col in display_df.columns:
-                display_df[col] = display_df[col].astype(float).round(3)
+        # Context scores are per idea, matching the order in ideas_list
+        ctx_cosine_scores = run_data.get('context_cosine_scores_raw', [np.nan] * len(ideas_list))
+        ctx_self_bleu_scores = run_data.get('context_self_bleu_scores_raw', [np.nan] * len(ideas_list))
+        ctx_bertscore_scores = run_data.get('context_bertscore_scores_raw', [np.nan] * len(ideas_list))
+
+        if not ideas_list:
+            return None # No ideas to display
+
+        num_ideas = len(ideas_list)
+
+        # Prepare data for table cells
+        idea_indices = [i + 1 for i in range(num_ideas)]
+        eval_summaries = [quality_evals_list[i].get('evaluation', 'N/A') if i < len(quality_evals_list) else 'N/A' for i in range(num_ideas)]
+        eval_full_texts = [quality_evals_list[i].get('evaluation_full', 'N/A').replace('\n', '<br>') if i < len(quality_evals_list) else 'N/A' for i in range(num_ideas)]
         
-        # Create the table with separate sections for different metrics
+        context_similarity_strings = []
+        for i in range(num_ideas):
+            cos_sim = ctx_cosine_scores[i] if i < len(ctx_cosine_scores) and pd.notna(ctx_cosine_scores[i]) else 0.0
+            bleu_sim = ctx_self_bleu_scores[i] if i < len(ctx_self_bleu_scores) and pd.notna(ctx_self_bleu_scores[i]) else 0.0
+            bert_sim = ctx_bertscore_scores[i] if i < len(ctx_bertscore_scores) and pd.notna(ctx_bertscore_scores[i]) else 0.0
+            context_similarity_strings.append(
+                f"cos: {cos_sim:.3f}<br>" 
+                f"bleu: {bleu_sim:.3f}<br>" 
+                f"bert: {bert_sim:.3f}"
+            )
+
+        # For pairwise, we can show the average pairwise for the whole batch, or it gets complex per idea here.
+        # The current dashboard structure shows overall pairwise in a separate summary.
+        # For simplicity, we can omit per-idea pairwise from this table, or show the overall batch avg.
+        # Let's fetch the overall average pairwise scores (which are lists of scores in run_data)
+        # and display their mean here for context, though it's not per-idea.
+        # This is just for display in this table, true summary stats are elsewhere.
+        
+        # avg_pairwise_cosine_list = run_data.get('avg_cosine_similarity', [])
+        # avg_pairwise_bleu_list = run_data.get('avg_self_bleu', [])
+        # avg_pairwise_bert_list = run_data.get('avg_bertscore', [])
+
+        # mean_pairwise_cos = np.mean(pd.to_numeric(pd.Series(avg_pairwise_cosine_list), errors='coerce').dropna()) if avg_pairwise_cosine_list else 0.0
+        # mean_pairwise_bleu = np.mean(pd.to_numeric(pd.Series(avg_pairwise_bleu_list), errors='coerce').dropna()) if avg_pairwise_bleu_list else 0.0
+        # mean_pairwise_bert = np.mean(pd.to_numeric(pd.Series(avg_pairwise_bert_list), errors='coerce').dropna()) if avg_pairwise_bert_list else 0.0
+        
+        # pairwise_similarity_strings = [
+        #     f"cos: {mean_pairwise_cos:.3f}<br>bleu: {mean_pairwise_bleu:.3f}<br>bert: {mean_pairwise_bert:.3f}"
+        # ] * num_ideas # Repeat for each row, as it's a batch summary
+
+        # Simpler: Let's remove pairwise from this per-idea table for now to avoid confusion.
+        # Pairwise stats are better in the summary table or dedicated pairwise plots.
+
         fig = go.Figure(data=[go.Table(
             header=dict(
                 values=[
-                    'Step', 'Run ID', 'Evaluation',
+                    'Idea #', 'Generated Idea Text', 'Evaluation',
                     'Similarity to Original Context',
-                    'Similarity to Other Ideas',
-                    'Full Analysis'
+                    # 'Avg. Pairwise Similarity (Batch)', # Removed for clarity
+                    'Full Evaluation Text'
                 ],
                 fill_color='royalblue',
                 align='left',
@@ -474,24 +608,12 @@ class ExperimentTracker:
             ),
             cells=dict(
                 values=[
-                    display_df['step'].fillna('N/A'),
-                    display_df['run_id'].fillna('N/A'),
-                    display_df['evaluation'].fillna('N/A'),
-                    # Context similarities
-                    display_df.apply(lambda row: (
-                        f"cos: {row.get('context_cosine', 0.0):.3f}<br>"
-                        f"bleu: {row.get('context_self_bleu', 0.0):.3f}<br>"
-                        f"bert: {row.get('context_bertscore', 0.0):.3f}"
-                    ), axis=1),
-                    # Pairwise similarities
-                    display_df.apply(lambda row: (
-                        f"cos: {row.get('avg_cosine_similarity', 0.0):.3f}<br>"
-                        f"bleu: {row.get('avg_self_bleu', 0.0):.3f}<br>"
-                        f"bert: {row.get('avg_bertscore', 0.0):.3f}"
-                    ), axis=1),
-                    display_df['evaluation_full'].fillna('N/A').apply(
-                        lambda x: x.replace('\n', '<br>') if pd.notnull(x) else ''
-                    )
+                    idea_indices,
+                    ideas_list,
+                    eval_summaries,
+                    context_similarity_strings,
+                    # pairwise_similarity_strings, # Removed for clarity
+                    eval_full_texts
                 ],
                 fill_color='lavender',
                 align='left',
@@ -500,9 +622,9 @@ class ExperimentTracker:
         )])
         
         fig.update_layout(
-            title="Experiment Results",
-            height=400 * (len(display_df) // 10 + 1),
-            margin=dict(t=30, l=10, r=10, b=10)
+            title="Detailed Experiment Results: Per Idea",
+            height=max(400, 35 * num_ideas + 100), # Adjust height based on number of ideas
+            margin=dict(t=50, l=10, r=10, b=10)
         )
         
         return fig
@@ -566,23 +688,40 @@ class ExperimentTracker:
             
         fig = go.Figure()
         
-        metrics = [
-            ('context_cosine', 'Cosine'),
-            ('context_self_bleu', 'Self-BLEU'),
-            ('context_bertscore', 'BERTScore')
-        ]
+        # metrics_to_plot maps the column name (which contains a list of scores per run)
+        # to the display name for the legend.
+        metrics_to_plot = {
+            'context_cosine': 'Context Cosine Sim.',
+            'context_self_bleu': 'Context Self-BLEU',
+            'context_bertscore': 'Context BERTScore'
+        }
         
-        for col, name in metrics:
+        # Assuming self._results_df has one row per experiment run/log_result call.
+        # For each metric, we extract the list of scores, calculate its mean, and plot that mean.
+        # If there were multiple rows (multiple runs), this would plot a mean for each run over time.
+        
+        for col, name in metrics_to_plot.items():
             if col in self._results_df.columns:
-                fig.add_trace(go.Scatter(
-                    x=self._results_df['run_id'],
-                    y=self._results_df[col],
-                    name=name,
-                    mode='lines+markers'
-                ))
+                # Define a helper to calculate mean from a list in a cell, defaulting to np.nan
+                def get_mean_from_list_cell(cell_value):
+                    if isinstance(cell_value, list) and cell_value:
+                        numeric_scores = pd.to_numeric(pd.Series(cell_value), errors='coerce').dropna()
+                        return numeric_scores.mean() if not numeric_scores.empty else np.nan
+                    return np.nan
+                
+                # Apply the helper to the column to get a Series of means (or NaNs)
+                y_values = self._results_df[col].apply(get_mean_from_list_cell)
+                
+                if not y_values.dropna().empty:
+                    fig.add_trace(go.Scatter(
+                        x=self._results_df['run_id'], # Or step, or a proper time series index
+                        y=y_values,
+                        name=name,
+                        mode='lines+markers'
+                    ))
         
         fig.update_layout(
-            title="Similarity to Original Context",
+            title="Average Similarity to Original Context per Run",
             xaxis_title="Idea",
             yaxis_title="Similarity Score",
             yaxis_range=[0, 1],
@@ -661,7 +800,6 @@ class ExperimentTracker:
                 
                 <h2>Metric Distributions with KDE</h2>
                 <div class="plot-grid">
-                    <div class="plot-container" id="quality-dist"></div>
                     <div class="plot-container" id="cosine-sim-dist"></div>
                     <div class="plot-container" id="self-bleu-dist"></div>
                     <div class="plot-container" id="bertscore-dist"></div>
@@ -687,7 +825,6 @@ class ExperimentTracker:
         
         # Add distribution plots with KDE
         for metric, div_id in [
-            ('quality_scores', 'quality-dist'),
             ('cosine_similarities', 'cosine-sim-dist'),
             ('self_bleu_scores', 'self-bleu-dist'),
             ('bertscore_scores', 'bertscore-dist')

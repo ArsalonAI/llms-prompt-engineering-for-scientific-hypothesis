@@ -1,13 +1,13 @@
 import warnings
-# Suppress specific RoBERTa warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="transformers.modeling_utils")
-warnings.filterwarnings("ignore", category=UserWarning, module="transformers.models.roberta.modeling_roberta")
+# Suppress specific RoBERTa/Hugging Face warnings early
+warnings.filterwarnings("ignore", message="Some weights of RobertaModel were not initialized from the model checkpoint at roberta-large and are newly initialized:.*", category=UserWarning)
+warnings.filterwarnings("ignore", message="You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.", category=UserWarning)
 
 import numpy as np
 import torch
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-from bert_score import score as bert_score
+from bert_score import score as bert_score_fn
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -37,8 +37,7 @@ def get_bertscore(candidate, others, lang="en"):
     if not others:
         return 0.0
     cands = [candidate] * len(others)
-    P, R, F1 = bert_score(cands, others, lang=lang, verbose=False)
-    # Convert PyTorch tensor to float
+    P, R, F1 = bert_score_fn(cands, others, lang=lang, verbose=False)
     return float(torch.mean(F1).item())
 
 
