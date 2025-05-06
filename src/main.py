@@ -46,7 +46,7 @@ with ExperimentTracker() as tracker:
     idea_generation_config = {
         "domain": "genetic engineering",
         "focus_area": "CRISPR gene editing",
-        "num_ideas": 5,
+        "num_ideas": 10,
         "batch_size": 5,  # Process 5 ideas at a time
         "system_prompt": system_prompt,
         "main_prompt": main_prompt,
