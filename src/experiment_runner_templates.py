@@ -304,11 +304,12 @@ def run_idea_generation_batch(
         "self_bleu_scores": results["self_bleu_scores"],
         "bertscore_scores": results["bertscore_scores"],
         
-        # Whether we did sampling for pairwise comparisons
+        # Information about pairwise comparisons
         "pairwise_sampled": do_sampling,
         "pairwise_sampling_strategy": sampling_strategy,
         "pairwise_total_possible": full_comparisons,
         "pairwise_actual": total_comparisons,
+        "pairwise_pairs_compared": results.get("pairwise_pairs"), # Log the actual pairs
         
         # Overall averages of pairwise scores for this run
         "avg_pairwise_cosine_similarity": avg_pairwise_cosine,

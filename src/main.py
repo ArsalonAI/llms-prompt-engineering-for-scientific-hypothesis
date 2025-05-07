@@ -5,124 +5,150 @@ import warnings
 warnings.filterwarnings("ignore", message="Some weights of RobertaModel were not initialized from the model checkpoint at roberta-large and are newly initialized:.*", category=UserWarning)
 warnings.filterwarnings("ignore", message="You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.", category=UserWarning)
 
-from experiment_runner_templates import run_idea_generation_batch
+import os
 from completion_util import llama_3_3_70B_completion
 from experiment_tracker import ExperimentTracker
-from HypothesisEvaluator import HypothesisEvaluator
 from pdf_util import extract_paper_content
-from prompts.scientific_prompts import generate_scientific_system_prompt, generate_scientific_hypothesis_prompt
-import os
+from experiment_runners import (
+    ScientificHypothesisRunner,
+    RoleBasedHypothesisRunner,
+    FewShotHypothesisRunner
+)
+from src.statistical_analysis import StatisticalAnalyzer
+from src.cross_experiment_analysis.runner import run_cross_experiment_analysis
 
 # Get the absolute path to the src directory
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
+EXPERIMENT_RESULTS_DIR = os.path.join(PROJECT_ROOT, "experiment_results")
 
 # Process the research paper using absolute path
-pdf_path = os.path.join(PROJECT_ROOT, 'src', 'research_papers', 'nihms-1761240.pdf')
-print(f"Loading PDF from: {pdf_path}")
-paper_content = extract_paper_content(pdf_path)
+def load_paper_content():
+    """Load and process the paper content."""
+    pdf_path = os.path.join(PROJECT_ROOT, 'src', 'research_papers', 'nihms-1761240.pdf')
+    print(f"Loading PDF from: {pdf_path}")
+    return extract_paper_content(pdf_path)
 
-# First experiment: Novel Hypothesis Generation
-with ExperimentTracker() as tracker:
-    # Initialize experiment-specific evaluator
-    evaluator = HypothesisEvaluator()
+def run_experiments(paper_content, num_ideas=10):
+    """
+    Run multiple experiments with different prompt techniques.
     
-    # Generate experiment-specific prompts
-    system_prompt = generate_scientific_system_prompt(
-        abstract=paper_content['abstract']
-    )
-    main_prompt = generate_scientific_hypothesis_prompt(
-        domain="genetic engineering",
-        focus_area="CRISPR gene editing",
-        context={
-            'abstract': paper_content['abstract'],
-            'methods': paper_content['methods']
+    Args:
+        paper_content: Dictionary containing paper content
+        num_ideas: Number of ideas to generate per experiment
+    
+    Returns:
+        Dictionary containing experiment results
+    """
+    experiment_results = {}
+    
+    # Initialize experiment tracker
+    with ExperimentTracker(output_dir=EXPERIMENT_RESULTS_DIR) as tracker:
+        # Initialize experiment runners
+        scientific_runner = ScientificHypothesisRunner(
+            tracker=tracker,
+            llama_fn=llama_3_3_70B_completion,
+            model_name="llama-3-3-70b",
+            domain="genetic engineering",
+            focus_area="CRISPR gene editing",
+            num_ideas=num_ideas
+        )
+        
+        role_based_runner = RoleBasedHypothesisRunner(
+            tracker=tracker,
+            llama_fn=llama_3_3_70B_completion,
+            model_name="llama-3-3-70b",
+            domain="genetic engineering",
+            focus_area="CRISPR gene editing",
+            num_ideas=num_ideas
+        )
+        
+        few_shot_runner = FewShotHypothesisRunner(
+            tracker=tracker,
+            llama_fn=llama_3_3_70B_completion,
+            model_name="llama-3-3-70b",
+            domain="genetic engineering",
+            focus_area="CRISPR gene editing",
+            num_ideas=num_ideas
+        )
+        
+        # Run experiments
+        print("\n=== Running Scientific Hypothesis Experiment ===")
+        scientific_results = scientific_runner.run("Scientific_Hypothesis", paper_content)
+        experiment_results["Scientific_Hypothesis"] = scientific_results
+        
+        print("\n=== Running Role-Based Hypothesis Experiment ===")
+        role_based_results = role_based_runner.run("Role_Based_Hypothesis", paper_content)
+        experiment_results["Role_Based_Hypothesis"] = role_based_results
+        
+        print("\n=== Running Few-Shot Hypothesis Experiment ===")
+        few_shot_results = few_shot_runner.run("Few_Shot_Hypothesis", paper_content)
+        experiment_results["Few_Shot_Hypothesis"] = few_shot_results
+        
+        # Collect all experiment results
+        all_experiment_results = {
+            "Scientific_Hypothesis": scientific_results,
+            "Role_Based_Hypothesis": role_based_results,
+            "Few_Shot_Hypothesis": few_shot_results
         }
-    )
+        
+    return all_experiment_results
 
-    # Experiment #1 - 
-
-    # Create experiment configuration
-    idea_generation_config = {
-        "domain": "genetic engineering",
-        "focus_area": "CRISPR gene editing",
-        "num_ideas": 10,
-        "batch_size": 5,  # Process 5 ideas at a time
-        "system_prompt": system_prompt,
-        "main_prompt": main_prompt,
-        "evaluation_criteria": evaluator.get_evaluation_criteria()
-    }
-
-    # Start the experiment with configuration
-    tracker.start_experiment(
-        experiment_name="Experiment1",
-        experiment_type="idea_generation",
-        model_name="llama-3-3-70b",
-        config=idea_generation_config
+def main():
+    """Main function to run all experiments."""
+    # Create experiment results directory and all subdirectories if they don't exist
+    os.makedirs(EXPERIMENT_RESULTS_DIR, exist_ok=True)
+    
+    # Create required subdirectories
+    subdirs = [
+        "cross_experiment_analysis",
+        "statistical_analysis",
+        "cross_experiment_analysis/plots"
+    ]
+    
+    for subdir in subdirs:
+        full_path = os.path.join(EXPERIMENT_RESULTS_DIR, subdir)
+        os.makedirs(full_path, exist_ok=True)
+        print(f"[INFO] Ensured directory exists: {full_path}")
+    
+    # Load paper content
+    paper_content = load_paper_content()
+    
+    # Run experiments
+    print("\n=== Starting Prompt Engineering Experiments ===")
+    experiment_results = run_experiments(paper_content, num_ideas=10)
+    
+    print("\n=== Experiments Completed Successfully ===")
+    
+    # Perform statistical analysis (combines current and historical data)
+    print("\n=== Running Statistical Analysis ===")
+    analyzer = StatisticalAnalyzer(
+        current_results=experiment_results,
+        experiment_dir=EXPERIMENT_RESULTS_DIR
     )
     
-    # Generate a unique run ID
-    run_id = tracker.generate_run_id("run")
+    analysis_results = analyzer.perform_analysis()
+    conclusions = analysis_results["conclusions"]
     
-    # Run the experiment
-    results = run_idea_generation_batch(
-        prompt=main_prompt,
-        llama_fn=lambda p, context=None: llama_3_3_70B_completion(
-            prompt=f"{context}\n\n{p}" if context else p, 
-            system_prompt=system_prompt
-        ),
-        model_name="llama-3-3-70b",
-        run_id=run_id,
-        quality_evaluator=evaluator.evaluate_hypothesis,
-        tracker=tracker,
-        context=f"Abstract: {paper_content['abstract']}\nMethods: {paper_content['methods']}",
-        num_ideas=idea_generation_config["num_ideas"]
-    )
-
-    # Print KDE results summary
-    print("\nKDE Analysis Results:")
-    # This `results` variable is the direct output of `run_idea_generation_batch`
-    kde_values_from_run = results.get("kde_values", {}) 
-
-    # Map KDE metric names to the keys used for the lists of scores in the `results` dict
-    # from run_idea_generation_batch
-    kde_metric_to_scores_key = {
-        "cosine": "cosine_similarities",
-        "self_bleu": "self_bleu_scores",
-        "bertscore": "bertscore_scores"
-        # "quality" is intentionally omitted as we are removing its KDE
-    }
-
-    for metric_key, kde_data in kde_values_from_run.items(): 
-        if kde_data.get("x") and kde_data.get("y"): 
-            try:
-                if not kde_data["y"]:
-                    raise ValueError("KDE y values are empty")
-                peak_idx = kde_data["y"].index(max(kde_data["y"]))
-                mode_value = kde_data["x"][peak_idx]
-                
-                if not kde_data["x"]:
-                    raise ValueError("KDE x values are empty")
-                x_min = min(kde_data["x"])
-                x_max = max(kde_data["x"])
-                
-                area = sum(kde_data["y"]) * (x_max - x_min) / len(kde_data["x"]) if len(kde_data["x"]) > 0 else 0
-                
-                print(f"\n{metric_key.title()} Distribution:")
-                
-                scores_key = kde_metric_to_scores_key.get(metric_key)
-                if scores_key and scores_key in results:
-                    print(f"  - Sample size: {len(results[scores_key])}")
-                else:
-                    print(f"  - Sample size: N/A (score key for metric '{metric_key}' not found or data missing)")
-                    
-                print(f"  - KDE points: {len(kde_data['x'])}")
-                print(f"  - Mode (peak density): {mode_value:.4f}")
-                print(f"  - Range: [{x_min:.4f}, {x_max:.4f}]")
-                print(f"  - Span: {x_max - x_min:.4f}")
-                print(f"  - Relative density (area under curve): {area:.4f}")
-            except (IndexError, ValueError, TypeError) as e: 
-                print(f"\n{metric_key.title()} Distribution: Error analyzing KDE - {str(e)}")
-        else:
-            print(f"\n{metric_key.title()} Distribution: No KDE data available or data is invalid.")
+    # Output key findings
+    print("\n=== Evidence-Based Conclusions ===")
+    for finding in conclusions["key_findings"]:
+        print(f"- {finding}")
+    
+    # Print method scores
+    print("\n=== Method Effectiveness ===")
+    for method, score in sorted(conclusions["method_scores"].items(), key=lambda x: x[1], reverse=True):
+        print(f"- {method}: {score} statistical wins")
+    
+    # Print recommendations
+    print("\n=== Recommendations ===")
+    for recommendation in conclusions["recommendations"]:
+        print(f"- {recommendation}")
+    
+    # Print dashboard path
+    dashboard_path = analysis_results["dashboard_path"]
+    print(f"\nView statistical analysis dashboard at: file://{os.path.abspath(dashboard_path)}")
+    
+if __name__ == "__main__":
+    main()
 

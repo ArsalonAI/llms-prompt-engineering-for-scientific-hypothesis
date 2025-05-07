@@ -84,7 +84,8 @@ class ExperimentTracker:
             'context_self_bleu_scores_raw': object, 
             'context_bertscore_scores_raw': object, 
             'has_kde_data': bool,
-            'runtime_seconds': float  # Add tracking for runtime
+            'runtime_seconds': float,  # Add tracking for runtime
+            'pairwise_pairs_compared': object # Stores the list of (i,j) tuples for actual pairwise comparisons
         }
         # Initialize results DataFrame with all required columns and dtypes
         self._results_df = pd.DataFrame(columns=list(results_df_dtypes.keys()))
@@ -167,7 +168,7 @@ class ExperimentTracker:
         # This part populates columns that might be lists (e.g. quality_scores can be list of dicts)
         # or other objects.
         # The keys here should match column names defined in results_df_dtypes in start_experiment.
-        for key in ['ideas', 'quality_scores', 'has_kde_data', 'batch_prompt', 'evaluation', 'evaluation_full']:
+        for key in ['ideas', 'quality_scores', 'has_kde_data', 'batch_prompt', 'evaluation', 'evaluation_full', 'pairwise_pairs_compared']:
             if key in result:
                 df_row[key] = result.get(key)
             elif key == 'has_kde_data':
@@ -769,6 +770,15 @@ class ExperimentTracker:
         ideas_list = run_data.get('ideas', []) # Assuming 'ideas' key holds list of idea strings
         quality_evals_list = run_data.get('quality_scores', []) # List of dicts from HypothesisEvaluator
         
+        # BUGFIX: Make sure quality_evals_list contains dictionaries rather than float values
+        # This handles cases where quality scores might be simple numbers instead of dictionaries
+        if quality_evals_list and not all(isinstance(item, dict) for item in quality_evals_list if item is not None):
+            # Convert non-dictionary values to a standard format with evaluation and evaluation_full keys
+            quality_evals_list = [
+                item if isinstance(item, dict) else {'evaluation': str(item), 'evaluation_full': str(item)}
+                for item in quality_evals_list
+            ]
+        
         # Context scores are per idea, matching the order in ideas_list
         # Fetch from the correct columns in run_data (self._results_df.iloc[0])
         # These columns ('context_cosine', etc.) should already contain lists of raw scores.
@@ -794,8 +804,8 @@ class ExperimentTracker:
 
         # Prepare data for table cells
         idea_indices = [i + 1 for i in range(num_ideas)]
-        eval_summaries = [quality_evals_list[i].get('evaluation', 'N/A') if i < len(quality_evals_list) else 'N/A' for i in range(num_ideas)]
-        eval_full_texts = [quality_evals_list[i].get('evaluation_full', 'N/A').replace('\n', '<br>') if i < len(quality_evals_list) else 'N/A' for i in range(num_ideas)]
+        eval_summaries = [quality_evals_list[i].get('evaluation', 'N/A') if i < len(quality_evals_list) and quality_evals_list[i] is not None else 'N/A' for i in range(num_ideas)]
+        eval_full_texts = [quality_evals_list[i].get('evaluation_full', 'N/A').replace('\n', '<br>') if i < len(quality_evals_list) and quality_evals_list[i] is not None else 'N/A' for i in range(num_ideas)]
         
         context_similarity_strings = []
         for i in range(num_ideas):
@@ -859,7 +869,7 @@ class ExperimentTracker:
         
         # Check if we have the actual pairs used (if sampling occurred)
         # The 'pairwise_pairs' key should store the list of (i,j) tuples that were actually compared
-        pairs_actually_compared = run_data.get('pairwise_pairs', None)
+        pairs_actually_compared = run_data.get('pairwise_pairs_compared', None)
 
         # Initialize an N x N matrix with NaNs (or a value indicating no comparison)
         similarity_matrix = np.full((num_ideas, num_ideas), np.nan)
