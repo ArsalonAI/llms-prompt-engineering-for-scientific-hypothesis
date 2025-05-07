@@ -29,7 +29,7 @@ def load_paper_content():
     print(f"Loading PDF from: {pdf_path}")
     return extract_paper_content(pdf_path)
 
-def run_experiments(paper_content, num_ideas=10):
+def run_experiments(paper_content, num_ideas=15):
     """
     Run multiple experiments with different prompt techniques.
     
@@ -116,7 +116,7 @@ def main():
     
     # Run experiments
     print("\n=== Starting Prompt Engineering Experiments ===")
-    experiment_results = run_experiments(paper_content, num_ideas=10)
+    experiment_results = run_experiments(paper_content, num_ideas=30)
     
     print("\n=== Experiments Completed Successfully ===")
     

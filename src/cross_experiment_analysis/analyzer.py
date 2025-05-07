@@ -581,7 +581,9 @@ class CrossExperimentAnalyzer:
                     title=f"{metric_name.title()} Density Distribution Comparison",
                     xaxis_title=f"{metric_name.title()} Score",
                     yaxis_title="Density",
-                    legend_title="Experiment Type"
+                    legend_title="Experiment Type",
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                    margin=dict(t=60, r=40, b=80, l=40)
                 )
                 
                 # Save the plot
@@ -589,50 +591,6 @@ class CrossExperimentAnalyzer:
                 plot_path = os.path.join(self.output_dir, "plots", plot_name)
                 fig.write_html(plot_path)
                 plot_paths[f"{metric_name}_kde"] = plot_path
-        
-        # Create runtime comparison plot
-        if "runtime_comparison" in self.analysis_results:
-            runtime_data = self.analysis_results["runtime_comparison"]
-            
-            # Create grouped bar chart for runtime and ideas per minute
-            fig = make_subplots(rows=1, cols=2, subplot_titles=("Runtime (seconds)", "Ideas per Minute"))
-            
-            # Add runtime bars
-            exp_types = list(runtime_data["runtime_seconds"].keys())
-            runtime_values = list(runtime_data["runtime_seconds"].values())
-            
-            fig.add_trace(
-                go.Bar(
-                    x=exp_types,
-                    y=runtime_values,
-                    name="Runtime (seconds)"
-                ),
-                row=1, col=1
-            )
-            
-            # Add ideas per minute bars
-            ideas_per_min_values = list(runtime_data["ideas_per_minute"].values())
-            
-            fig.add_trace(
-                go.Bar(
-                    x=exp_types,
-                    y=ideas_per_min_values,
-                    name="Ideas per Minute"
-                ),
-                row=1, col=2
-            )
-            
-            # Update layout
-            fig.update_layout(
-                title="Performance Comparison",
-                showlegend=False
-            )
-            
-            # Save the plot
-            plot_name = "performance_comparison.html"
-            plot_path = os.path.join(self.output_dir, "plots", plot_name)
-            fig.write_html(plot_path)
-            plot_paths["performance"] = plot_path
         
         return plot_paths
     
@@ -646,7 +604,7 @@ class CrossExperimentAnalyzer:
         if not self.analysis_results:
             self.compare_metrics()
         
-        # Generate plots
+        # Generate plots (performance plot generation is now removed)
         plot_paths = self.generate_comparison_plots()
         
         # Create the dashboard HTML
@@ -679,7 +637,12 @@ class CrossExperimentAnalyzer:
                     border-bottom: 2px solid #3498db;
                     padding-bottom: 10px;
                 }}
-                .summary {{
+                .section-description {{
+                    font-size: 0.9em;
+                    color: #555;
+                    margin-bottom: 15px;
+                }}
+                .summary, .experiment-details-section {{
                     background-color: #f8f9fa;
                     padding: 15px;
                     border-radius: 5px;
@@ -715,43 +678,16 @@ class CrossExperimentAnalyzer:
                     background-color: #f9f9f9;
                 }}
                 .iframe-container {{
-                    height: 500px;
+                    height: 500px; /* Adjust as needed */
                     width: 100%;
-                    overflow: hidden;
+                    overflow: auto; /* Allow scroll if content overflows */
                 }}
                 .iframe-container iframe {{
                     width: 100%;
                     height: 100%;
                     border: none;
                 }}
-                .tabset {{
-                    display: flex;
-                    flex-wrap: wrap;
-                    margin: 20px 0;
-                }}
-                .tab-label {{
-                    padding: 10px 15px;
-                    background-color: #f2f2f2;
-                    border: 1px solid #ddd;
-                    cursor: pointer;
-                    border-radius: 5px 5px 0 0;
-                    margin-right: 5px;
-                }}
-                .tab-label.active {{
-                    background-color: #3498db;
-                    color: white;
-                    border-color: #3498db;
-                }}
-                .tab-content {{
-                    display: none;
-                    padding: 15px;
-                    border: 1px solid #ddd;
-                    border-radius: 0 5px 5px 5px;
-                    width: 100%;
-                }}
-                .tab-content.active {{
-                    display: block;
-                }}
+                /* Removed tab-specific CSS */
             </style>
         </head>
         <body>
@@ -760,125 +696,154 @@ class CrossExperimentAnalyzer:
                 
                 <div class="summary">
                     <h2>Summary</h2>
-                    <p>This dashboard provides a comparison of results across different experiment types.</p>
+                    <p class="section-description">This dashboard provides a high-level overview and comparison of results across different experiment types.</p>
                     <p>Total experiments analyzed: {len(self.experiment_data)}</p>
                     <p>Experiment types: {", ".join(sorted(set(exp["type"] for exp in self.experiment_metrics.values())))}</p>
                     <p>Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
                 </div>
-                
-                <!-- Performance Metrics Section -->
-                <h2>Performance Metrics</h2>
-                <div class="iframe-container">
-                    <iframe src="plots/performance_comparison.html"></iframe>
+
+                <!-- Experiment Details Section (Moved to top) -->
+                <div class="experiment-details-section">
+                    <h2>Experiment Details</h2>
+                    <p class="section-description">This table summarizes key parameters and performance metrics for each individual experiment run included in this analysis.</p>
+                    <table class="stat-table">
+                        <tr>
+                            <th>Experiment</th>
+                            <th>Type</th>
+                            <th>Model</th>
+                            <th>Run Date</th>
+                            <th>Ideas</th>
+                            <th>Runtime (s)</th>
+                            <th>Ideas/Minute</th>
+                        </tr>
+        """
+        
+        for exp_name, exp_metrics in self.experiment_metrics.items():
+            run_date = exp_metrics.get("run_date", "N/A")
+            if isinstance(run_date, str) and run_date:
+                try:
+                    date_obj = datetime.fromisoformat(run_date.replace("Z", "+00:00"))
+                    run_date = date_obj.strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    pass # Keep original string if parsing fails
+            
+            html_content += f"""
+                <tr>
+                    <td>{exp_metrics.get("name", exp_name)}</td>
+                    <td>{exp_metrics.get("type", "N/A")}</td>
+                    <td>{exp_metrics.get("model", "N/A")}</td>
+                    <td>{run_date}</td>
+                    <td>{self.experiment_data[exp_name]["results"].get("summary", {}).get("Total Ideas", "N/A")}</td>
+                    <td>{exp_metrics.get("runtime_seconds", 0):.1f}</td>
+                    <td>{exp_metrics.get("ideas_per_minute", 0):.1f}</td>
+                </tr>
+            """
+        html_content += """
+                    </table>
                 </div>
+                
+                <!-- Performance Metrics Section (Removed) -->
                 
                 <!-- Context Similarity Metrics Section -->
                 <h2>Context Similarity Metrics</h2>
-                <div class="tabset" id="context-tabs">
+                <p class="section-description">This section displays metrics comparing generated ideas to the original input context. Higher scores generally indicate closer alignment or relevance to the source material.</p>
         """
         
-        # Add tabs for context metrics
         context_metrics = list(self.analysis_results.get("context_metrics", {}).keys())
-        for i, metric in enumerate(context_metrics):
-            active_class = "active" if i == 0 else ""
-            html_content += f'<div class="tab-label {active_class}" onclick="openTab(\'context-tab-{i}\', \'context-tabs\')">{metric.title()}</div>\n'
-        
-        # Add tab content for context metrics
-        html_content += "</div>\n"  # Close tab labels
-        
-        for i, metric in enumerate(context_metrics):
-            active_class = "active" if i == 0 else ""
-            plot_key = f"context_metrics_{metric}"
-            if plot_key in plot_paths:
-                plot_file = os.path.basename(plot_paths[plot_key])
-                html_content += f'''
-                <div id="context-tab-{i}" class="tab-content {active_class}">
-                    <div class="iframe-container">
-                        <iframe src="plots/{plot_file}"></iframe>
-                    </div>
-                </div>
-                '''
+        if context_metrics:
+            for metric in context_metrics:
+                html_content += f"<h3>{metric.replace('_', ' ').title()}</h3>\n"
+                plot_key = f"context_metrics_{metric}"
+                if plot_key in plot_paths:
+                    plot_file = os.path.basename(plot_paths[plot_key])
+                    html_content += f'''
+                        <div class="plot-container">
+                            <div class="iframe-container">
+                                <iframe src="plots/{plot_file}"></iframe>
+                            </div>
+                        </div>
+                    '''
+                else:
+                    html_content += "<p>Plot not available for this metric.</p>"
+        else:
+            html_content += "<p>No context similarity metrics available for comparison.</p>"
         
         # Pairwise Similarity Metrics Section
         html_content += """
-                <!-- Pairwise Similarity Metrics Section -->
                 <h2>Pairwise Similarity Metrics</h2>
-                <div class="tabset" id="pairwise-tabs">
+                <p class="section-description">This section shows metrics comparing generated ideas to each other. These can indicate the diversity or novelty within the set of generated ideas (lower scores often mean more diversity).</p>
         """
-        
-        # Add tabs for pairwise metrics
         pairwise_metrics = list(self.analysis_results.get("pairwise_metrics", {}).keys())
-        for i, metric in enumerate(pairwise_metrics):
-            active_class = "active" if i == 0 else ""
-            html_content += f'<div class="tab-label {active_class}" onclick="openTab(\'pairwise-tab-{i}\', \'pairwise-tabs\')">{metric.title()}</div>\n'
-        
-        # Add tab content for pairwise metrics
-        html_content += "</div>\n"  # Close tab labels
-        
-        for i, metric in enumerate(pairwise_metrics):
-            active_class = "active" if i == 0 else ""
-            plot_key = f"pairwise_metrics_{metric}"
-            if plot_key in plot_paths:
-                plot_file = os.path.basename(plot_paths[plot_key])
-                html_content += f'''
-                <div id="pairwise-tab-{i}" class="tab-content {active_class}">
-                    <div class="iframe-container">
-                        <iframe src="plots/{plot_file}"></iframe>
-                    </div>
-                </div>
-                '''
-        
+        if pairwise_metrics:
+            for metric in pairwise_metrics:
+                html_content += f"<h3>{metric.replace('_', ' ').title()}</h3>\n"
+                plot_key = f"pairwise_metrics_{metric}"
+                if plot_key in plot_paths:
+                    plot_file = os.path.basename(plot_paths[plot_key])
+                    html_content += f'''
+                        <div class="plot-container">
+                            <div class="iframe-container">
+                                <iframe src="plots/{plot_file}"></iframe>
+                            </div>
+                        </div>
+                    '''
+                else:
+                    html_content += "<p>Plot not available for this metric.</p>"
+        else:
+            html_content += "<p>No pairwise similarity metrics available for comparison.</p>"
+
         # Distribution Comparison Section
         html_content += """
-                <!-- Distribution Comparison Section -->
                 <h2>Distribution Comparison</h2>
-                <div class="tabset" id="distribution-tabs">
+                <p class="section-description">
+                    These plots visualize the distribution of <strong>pairwise similarity scores</strong> (Cosine, Self-BLEU, BERTScore) calculated between all unique pairs of ideas generated <em>within each experiment type</em>. 
+                    This helps assess the internal diversity of ideas produced by each prompting strategy. Each experiment type is aggregated across all its runs.
+                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score, and the Y-axis shows the density (concentration) of scores. Peaks indicate common similarity values for that strategy.
+                    <br><strong>Box Plots:</strong> The X-axis shows the different Experiment Types. Each box plot summarizes the distribution of pairwise similarity scores for all ideas generated by that strategy. It shows the median (central line), interquartile range (the box), whiskers (typically 1.5x IQR), and any outliers (individual points). This allows for comparing the central tendency and spread of pairwise scores between strategies.
+                </p>
         """
-        
-        # Add tabs for distribution metrics
         distribution_metrics = ["cosine", "self_bleu", "bertscore"]
-        for i, metric in enumerate(distribution_metrics):
-            active_class = "active" if i == 0 else ""
-            html_content += f'<div class="tab-label {active_class}" onclick="openTab(\'dist-tab-{i}\', \'distribution-tabs\')">{metric.title()}</div>\n'
-        
-        # Add tab content for distribution metrics
-        html_content += "</div>\n"  # Close tab labels
-        
-        for i, metric in enumerate(distribution_metrics):
-            active_class = "active" if i == 0 else ""
+        for metric in distribution_metrics:
+            # This ensures each metric's plots (KDE and Box) are displayed under its own H3, not in a tab.
+            html_content += f"<h3>{metric.title()} Score Distributions</h3>\n"
             kde_key = f"{metric}_kde"
             boxplot_key = f"raw_{metric}_boxplot"
             
-            html_content += f'<div id="dist-tab-{i}" class="tab-content {active_class}">\n'
-            
+            plot_grid_items = ""
             if kde_key in plot_paths:
                 kde_file = os.path.basename(plot_paths[kde_key])
-                html_content += f'''
-                    <h3>Density Distribution</h3>
-                    <div class="iframe-container">
-                        <iframe src="plots/{kde_file}"></iframe>
+                plot_grid_items += f'''
+                    <div class="plot-container">
+                        <h4>Density Distribution (KDE)</h4>
+                        <div class="iframe-container">
+                            <iframe src="plots/{kde_file}"></iframe>
+                        </div>
                     </div>
                 '''
             
             if boxplot_key in plot_paths:
                 boxplot_file = os.path.basename(plot_paths[boxplot_key])
-                html_content += f'''
-                    <h3>Box Plot</h3>
-                    <div class="iframe-container">
-                        <iframe src="plots/{boxplot_file}"></iframe>
+                plot_grid_items += f'''
+                    <div class="plot-container">
+                        <h4>Box Plot</h4>
+                        <div class="iframe-container">
+                            <iframe src="plots/{boxplot_file}"></iframe>
+                        </div>
                     </div>
                 '''
             
-            html_content += "</div>\n"
+            if plot_grid_items:
+                 html_content += f'<div class="plot-grid">{plot_grid_items}</div>' # plot-grid will arrange KDE and Box side-by-side if both exist
+            else:
+                html_content += f"<p>Distribution plots not available for {metric.title()}.</p>"
         
         # Statistical Tests Section
         html_content += """
-                <!-- Statistical Tests Section -->
                 <h2>Statistical Tests</h2>
+                <p class="section-description">This section presents the results of statistical tests (Mann-Whitney U, T-test, Kolmogorov-Smirnov) comparing the distributions of scores for different metrics between pairs of experiment types. It helps determine if observed differences are statistically significant.</p>
         """
-        
-        # Add tables for statistical tests
-        if "statistical_tests" in self.analysis_results:
+        if "statistical_tests" in self.analysis_results and self.analysis_results["statistical_tests"]:
+            html_content += '<div style="max-height: 400px; overflow-y: auto;">' # Start scrollable div
             for metric, tests in self.analysis_results["statistical_tests"].items():
                 html_content += f"""
                 <h3>{metric.title()} Comparison Tests</h3>
@@ -899,7 +864,7 @@ class CrossExperimentAnalyzer:
                 for comparison, test_results in tests.items():
                     mw_test = test_results["mann_whitney"]
                     t_test = test_results["t_test"]
-                    ks_test = test_results.get("ks_test", {"p_value": np.nan, "significant": False}) # Handle missing ks_test for older data
+                    ks_test = test_results.get("ks_test", {"p_value": np.nan, "significant": False}) 
                     effect_size = test_results["effect_size"]
                     
                     html_content += f"""
@@ -915,71 +880,12 @@ class CrossExperimentAnalyzer:
                         <td>{effect_size['interpretation']}</td>
                     </tr>
                     """
-                
                 html_content += "</table>\n"
-        
-        # Experiment Detail Section
-        html_content += """
-                <!-- Experiment Details Section -->
-                <h2>Experiment Details</h2>
-                <table class="stat-table">
-                    <tr>
-                        <th>Experiment</th>
-                        <th>Type</th>
-                        <th>Model</th>
-                        <th>Run Date</th>
-                        <th>Ideas</th>
-                        <th>Runtime (s)</th>
-                        <th>Ideas/Minute</th>
-                    </tr>
-        """
-        
-        for exp_name, exp_metrics in self.experiment_metrics.items():
-            run_date = exp_metrics.get("run_date", "N/A")
-            if isinstance(run_date, str) and run_date:
-                # Try to parse and format the date
-                try:
-                    date_obj = datetime.fromisoformat(run_date.replace("Z", "+00:00"))
-                    run_date = date_obj.strftime("%Y-%m-%d %H:%M")
-                except ValueError:
-                    pass
-            
-            html_content += f"""
-                <tr>
-                    <td>{exp_metrics.get("name", exp_name)}</td>
-                    <td>{exp_metrics.get("type", "N/A")}</td>
-                    <td>{exp_metrics.get("model", "N/A")}</td>
-                    <td>{run_date}</td>
-                    <td>{self.experiment_data[exp_name]["results"].get("summary", {}).get("Total Ideas", "N/A")}</td>
-                    <td>{exp_metrics.get("runtime_seconds", 0):.1f}</td>
-                    <td>{exp_metrics.get("ideas_per_minute", 0):.1f}</td>
-                </tr>
-            """
+            html_content += '</div>' # End scrollable div
+        else:
+            html_content += "<p>No statistical test results available.</p>"
         
         html_content += """
-                </table>
-                
-                <script>
-                function openTab(tabId, tabsetId) {
-                    // Hide all tab content
-                    var tabContents = document.getElementById(tabsetId).parentNode.querySelectorAll('.tab-content');
-                    for (var i = 0; i < tabContents.length; i++) {
-                        tabContents[i].classList.remove('active');
-                    }
-                    
-                    // Remove active class from all tab labels
-                    var tabLabels = document.getElementById(tabsetId).querySelectorAll('.tab-label');
-                    for (var i = 0; i < tabLabels.length; i++) {
-                        tabLabels[i].classList.remove('active');
-                    }
-                    
-                    // Show the selected tab content
-                    document.getElementById(tabId).classList.add('active');
-                    
-                    // Add active class to the clicked tab label
-                    event.currentTarget.classList.add('active');
-                }
-                </script>
             </div>
         </body>
         </html>

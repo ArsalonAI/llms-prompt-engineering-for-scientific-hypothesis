@@ -858,17 +858,29 @@ class ExperimentTracker:
     def _create_heatmap(self, metric_col_name: str, plot_title_suffix: str) -> go.Figure:
         """Create a heatmap visualization for pairwise comparisons for a given metric."""
         if self._results_df is None or self._results_df.empty:
-            print(f"[WARN] Heatmap: _results_df is None or empty.")
+            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - _results_df is None or empty.")
             return None
 
         run_data = self._results_df.iloc[0]
+        # Try to infer num_ideas from the length of the 'ideas' list if 'num_ideas' is 0 or missing
         num_ideas = run_data.get('num_ideas', 0)
-        
-        # The metric_col_name (e.g., 'avg_cosine_similarity') contains a flat list of pairwise scores
-        pairwise_scores_flat = run_data.get(metric_col_name, [])
+        ideas_list = run_data.get('ideas', [])
+        if not isinstance(ideas_list, list): ideas_list = [] # ensure it's a list
+        if num_ideas == 0 and ideas_list: 
+            num_ideas = len(ideas_list)
+            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Inferred num_ideas={num_ideas} from ideas list len={len(ideas_list)}.")
 
-        if num_ideas < 2 or not isinstance(pairwise_scores_flat, list) or not pairwise_scores_flat:
-            print(f"[WARN] Heatmap: Not enough ideas ({num_ideas}) or missing/invalid pairwise scores for '{metric_col_name}'.")
+        pairwise_scores_flat = run_data.get(metric_col_name)
+        if not isinstance(pairwise_scores_flat, list):
+            print(f"[DEBUG] Heatmap ({plot_title_suffix}): pairwise_scores_flat for '{metric_col_name}' was not a list, got {type(pairwise_scores_flat)}. Defaulting to [].")
+            pairwise_scores_flat = []
+        
+        print(f"[DEBUG] Heatmap ({plot_title_suffix}): num_ideas={num_ideas}, len(pairwise_scores_flat for '{metric_col_name}')={len(pairwise_scores_flat)}")
+        if num_ideas < 2:
+            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - Not enough ideas ({num_ideas}).")
+            return None
+        if not pairwise_scores_flat:
+            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - Missing or empty pairwise scores for '{metric_col_name}'. Found: {pairwise_scores_flat}")
             return None
         
         # Check if we have the actual pairs used (if sampling occurred)
@@ -999,103 +1011,101 @@ class ExperimentTracker:
                                         plot_title_suffix: str = 'Cosine') -> go.Figure:
         """Create a scatter plot comparing context similarity vs. average pairwise similarity for each idea."""
         if self._results_df is None or self._results_df.empty:
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - _results_df is None or empty.")
             return None
         
-        # Check if we have at least some data to plot
-        has_context_data = context_metric_col in self._results_df.columns
-        has_pairwise_data = pairwise_metric_col in self._results_df.columns
-        has_ideas_data = 'ideas' in self._results_df.columns
-        
-        if not (has_context_data or has_pairwise_data):
-            print(f"[WARN] Missing both context and pairwise data columns for scatter plot.")
-            return None
-        
-        # Get data from first row 
-        if len(self._results_df) > 0:
-            run_data = self._results_df.iloc[0]
-        else:
-            # This case should ideally not be reached if the initial checks pass,
-            # but it's a safeguard.
-            print(f"[WARN] Scatter plot: _results_df is empty despite initial checks.")
-            return None
-        
-        # Try to get number of ideas and idea texts
+        run_data = self._results_df.iloc[0]
+
+        # Try to infer num_ideas first
         num_ideas = run_data.get('num_ideas', 0)
         ideas_list = run_data.get('ideas', [])
-        
-        # If num_ideas is 0 but we have ideas list, use its length
-        if num_ideas == 0 and ideas_list:
+        if not isinstance(ideas_list, list): ideas_list = []
+        if num_ideas == 0 and ideas_list: 
             num_ideas = len(ideas_list)
-        # If we have num_ideas but no ideas list, create placeholder texts
-        elif num_ideas > 0 and not ideas_list:
-            ideas_list = [f"Idea {i+1}" for i in range(num_ideas)]
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Inferred num_ideas={num_ideas} from ideas list len={len(ideas_list)}.")
         
-        # If we still have no ideas, check if we can infer from metrics
-        if num_ideas == 0:
-            # Try to infer from context metric length if available
-            if has_context_data:
-                context_scores = run_data.get(context_metric_col, [])
-                if isinstance(context_scores, list) and context_scores:
-                    num_ideas = len(context_scores)
-                    ideas_list = [f"Idea {i+1}" for i in range(num_ideas)]
+        # If still no num_ideas, try to infer from context score list length
+        context_scores_for_metric = run_data.get(context_metric_col, [])
+        if not isinstance(context_scores_for_metric, list): 
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): context_scores_for_metric for '{context_metric_col}' was not a list, got {type(context_scores_for_metric)}. Defaulting to [].")
+            context_scores_for_metric = []
         
-        # If we still have no ideas to plot, we can't create the scatter plot
-        if num_ideas == 0:
-            print(f"[WARN] Could not determine number of ideas for scatter plot.")
+        if num_ideas == 0 and context_scores_for_metric: # Try inferring num_ideas again if ideas_list was empty
+            num_ideas = len(context_scores_for_metric)
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Inferred num_ideas={num_ideas} from '{context_metric_col}' list length ({len(context_scores_for_metric)}).")
+
+        if num_ideas == 0: 
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - Final num_ideas is 0.")
             return None
         
-        # Prepare x-axis data (context scores)
+        if not ideas_list and num_ideas > 0:
+            ideas_list = [f"Idea {i+1}" for i in range(num_ideas)]
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Created placeholder idea texts for {num_ideas} ideas.")
+
+        has_context_data = len(context_scores_for_metric) > 0
+        
+        pairwise_scores_flat = run_data.get(pairwise_metric_col, [])
+        if not isinstance(pairwise_scores_flat, list): 
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): pairwise_scores_flat for '{pairwise_metric_col}' was not a list, got {type(pairwise_scores_flat)}. Defaulting to [].")
+            pairwise_scores_flat = []
+        has_pairwise_data = len(pairwise_scores_flat) > 0
+
+        print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): num_ideas={num_ideas}, len(context_scores '{context_metric_col}')={len(context_scores_for_metric)}, len(pairwise_scores_flat '{pairwise_metric_col}')={len(pairwise_scores_flat)}")
+
+        if not has_context_data:
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Missing or empty context data in column '{context_metric_col}'. Content: {context_scores_for_metric}")
+        if not has_pairwise_data:
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Missing or empty pairwise data in column '{pairwise_metric_col}'. Content: {pairwise_scores_flat}")
+
+        if not has_context_data and not has_pairwise_data:
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - Missing both context and pairwise data.")
+            return None
+        
         x_values_raw = []
         if has_context_data:
-            # Correctly fetch the list of context scores for the specified metric column
-            # e.g., context_metric_col could be 'context_cosine' or 'context_bertscore'
-            context_scores_for_metric = run_data.get(context_metric_col, [])
-            if isinstance(context_scores_for_metric, list) and context_scores_for_metric:
-                x_values_raw = context_scores_for_metric
+            x_values_raw = context_scores_for_metric
         
-        # Convert to numeric, coercing errors. This will be a pd.Series.
         x_values = pd.to_numeric(pd.Series(x_values_raw), errors='coerce')
 
-        # If no context data but we know num_ideas, use dummy values and note in title
-        if x_values.empty and num_ideas > 0:
-            x_values = pd.Series([np.nan] * num_ideas) # Use NaNs so they don't plot if other axis has data
-            context_available = False
-        else:
-            context_available = not x_values.isnull().all()
+        context_available = not x_values.isnull().all()
+        if not context_available and has_context_data: # Data was present but not numeric
+             print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Context data in '{context_metric_col}' (len {len(x_values_raw)}) was not numeric after coercion. First 5 raw: {x_values_raw[:5]}")
 
-        # Prepare y-axis data (pairwise scores)
+
         y_values_raw = []
-        if has_pairwise_data:
-            # pairwise_metric_col is e.g. 'avg_cosine_similarity' which holds the flat list of ALL pairwise scores
-            pairwise_scores_flat = run_data.get(pairwise_metric_col, [])
-            if isinstance(pairwise_scores_flat, list) and pairwise_scores_flat and num_ideas > 0:
-                # This function calculates the average pairwise score FOR EACH IDEA
-                avg_pairwise_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_scores_flat)
-                y_values_raw = avg_pairwise_per_idea
-            
-        # Convert to numeric, coercing errors. This will be a pd.Series.
+        if has_pairwise_data and num_ideas > 0: 
+            avg_pairwise_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_scores_flat)
+            y_values_raw = avg_pairwise_per_idea
+            if not y_values_raw: 
+                print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): _calculate_avg_pairwise_per_idea returned empty for '{pairwise_metric_col}' with num_ideas={num_ideas} and len(pairwise_scores_flat)={len(pairwise_scores_flat)}.")
+        
         y_values = pd.to_numeric(pd.Series(y_values_raw), errors='coerce')
         
-        # If no pairwise data but we know num_ideas, use dummy values and note in title
-        if y_values.empty and num_ideas > 0:
-            y_values = pd.Series([np.nan] * num_ideas) # Use NaNs
-            pairwise_available = False
-        else:
-            pairwise_available = not y_values.isnull().all()
+        pairwise_available = not y_values.isnull().all()
+        if not pairwise_available and has_pairwise_data and y_values_raw: 
+             print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Pairwise data from '{pairwise_metric_col}' (len {len(y_values_raw)}, after _calc) was not numeric. First 5 raw: {y_values_raw[:5]}")
 
-        # Ensure x_values and y_values are Series of the same length as num_ideas, padding with NaN if necessary
-        # This is crucial if one metric was partially available.
-        if len(x_values) < num_ideas:
-            x_values = pd.concat([x_values, pd.Series([np.nan]*(num_ideas - len(x_values)))], ignore_index=True)
-        if len(y_values) < num_ideas:
-            y_values = pd.concat([y_values, pd.Series([np.nan]*(num_ideas - len(y_values)))], ignore_index=True)
+        # Pad with NaNs to match num_ideas if necessary, for consistent plotting behavior
+        # This is important if, for instance, context scores are available for all ideas, but pairwise only for some (or vice-versa)
+        # or if lists were shorter than num_ideas due to upstream issues.
+        current_x_len = len(x_values)
+        if current_x_len < num_ideas:
+            x_values = pd.concat([x_values, pd.Series([np.nan]*(num_ideas - current_x_len))], ignore_index=True)
+        
+        current_y_len = len(y_values)
+        if current_y_len < num_ideas:
+            y_values = pd.concat([y_values, pd.Series([np.nan]*(num_ideas - current_y_len))], ignore_index=True)
 
-        # Prepare hover text
-        if has_ideas_data and ideas_list and len(ideas_list) == num_ideas:
-            hover_texts = [f"Idea {i+1}: {ideas_list[i][:50]}..." if i < len(ideas_list) else f"Idea {i+1}" 
-                           for i in range(min(len(x_values), len(y_values)))]
-        else:
-            hover_texts = [f"Idea {i+1}" for i in range(min(len(x_values), len(y_values)))]
+        # Ensure hover_texts matches the longer of x_values or y_values, up to num_ideas
+        # This prevents errors if ideas_list is shorter than num_ideas after all inferences.
+        max_len = min(num_ideas, max(len(x_values), len(y_values)))
+        hover_texts = [ideas_list[i][:50] + "..." if i < len(ideas_list) and ideas_list[i] else f"Idea {i+1}" 
+                       for i in range(max_len)]
+
+        # Only attempt to plot if we have some valid points for at least one axis
+        if not context_available and not pairwise_available:
+            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): No numeric data available for either axis after processing. Skipping plot generation.")
+            return None # Redundant due to earlier check, but good safeguard
 
         # Create the figure with available data
         fig = go.Figure(data=go.Scatter(
@@ -1263,6 +1273,38 @@ class ExperimentTracker:
                 .metric-table th {{
                     background-color: #e9ecef;
                 }}
+                .prompts-display {{
+                    background-color: #eaf2f8;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 20px 0;
+                    border: 1px solid #aed6f1;
+                }}
+                .prompt-box {{
+                    background-color: #ffffff;
+                    padding: 10px;
+                    border-radius: 4px;
+                    margin-bottom: 10px;
+                    border: 1px solid #d6eaf8;
+                }}
+                .prompt-box h3 {{
+                    margin-top: 0;
+                    color: #2980b9;
+                    border-bottom: none;
+                    font-size: 1.1em;
+                }}
+                .prompt-box pre {{
+                    white-space: pre-wrap; /* Allow text to wrap */
+                    word-wrap: break-word; /* Break long words */
+                    font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+                    font-size: 0.9em;
+                    padding: 8px;
+                    background-color: #f9f9f9;
+                    border: 1px solid #eeeeee;
+                    border-radius: 3px;
+                    max-height: 300px; /* Limit height and make scrollable */
+                    overflow-y: auto;
+                }}
             </style>
         </head>
         <body>
@@ -1277,6 +1319,19 @@ class ExperimentTracker:
                     <p><strong>Start Time:</strong> {metadata['start_time']}</p>
                     <p><strong>End Time:</strong> {metadata['end_time']}</p>
                     <p><strong>Runtime:</strong> {runtime_display}</p>
+                </div>
+
+                <div class=\"prompts-display\">
+                    <h2>Prompt Configuration Used</h2>
+                    <div class=\"prompt-box\">
+                        <h3>System Prompt:</h3>
+                        <pre>{metadata.get('config', {}).get('system_prompt', 'N/A')}</pre>
+                    </div>
+                    <div class=\"prompt-box\">
+                        <h3>Main (User) Prompt:</h3>
+                        <pre>{metadata.get('config', {}).get('main_prompt', 'N/A')}</pre>
+                    </div>
+                    <p><strong>Context Provided:</strong> Abstract and Methods from loaded paper.</p>
                 </div>
 
                 <!-- Section 1: Key Statistics -->

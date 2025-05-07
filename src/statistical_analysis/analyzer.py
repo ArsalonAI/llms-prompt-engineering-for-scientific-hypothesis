@@ -384,12 +384,32 @@ class StatisticalAnalyzer:
         with open(dashboard_path, 'r', encoding='utf-8') as f:
             dashboard_html = f.read()
         
+        # Generate the overall conclusion section
+        overall_conclusion_html = self._generate_overall_conclusion_html(conclusions)
+        
         # Add statistical analysis sections
         evidence_section = self._generate_evidence_section(conclusions, significant_differences)
         stats_section = self._generate_extended_statistics_section(extended_stats)
         
-        # Insert the sections before the closing body tag
-        dashboard_html = dashboard_html.replace('</body>', f'{evidence_section}{stats_section}</body>')
+        # Insert the sections: Overall Conclusion first, then the rest of comparison dashboard, then evidence & stats.
+        # We need a placeholder in the comparison_dashboard.html or a robust way to insert at the top.
+        # For now, let's assume comparison_dashboard.html has a <div class="container">...</div> structure.
+        # We will insert the overall conclusion right after the main H1 and before the existing summary.
+        
+        # A more robust way is to insert after a specific, unique comment/tag if we control comparison_dashboard.html more directly.
+        # Or, modify comparison_dashboard.html generation to leave a placeholder.
+        # Current approach: replace the body tag to prepend, then add the other sections at the end.
+
+        # Prepend Overall Conclusion to the body of the base dashboard
+        # This is a bit of a hack; ideally, the base dashboard has a placeholder.
+        if "<body>" in dashboard_html:
+            dashboard_html = dashboard_html.replace("<body>", f"<body>\n{overall_conclusion_html}", 1)
+        else:
+            # Fallback if no body tag (shouldn't happen for full HTML)
+            dashboard_html = overall_conclusion_html + dashboard_html
+
+        # Append the statistical sections to the end of the modified dashboard body
+        dashboard_html = dashboard_html.replace('</body>', f'{evidence_section}{stats_section}</body>', 1)
         
         # Save the enhanced dashboard
         enhanced_path = os.path.join(self.output_dir, "statistical_analysis_dashboard.html")
@@ -398,6 +418,32 @@ class StatisticalAnalyzer:
         
         return enhanced_path
     
+    def _generate_overall_conclusion_html(self, conclusions: Dict[str, Any]) -> str:
+        """Generates an HTML section for the overall conclusions."""
+        if not conclusions or not conclusions.get("key_findings"):
+            return "<div class='overall-conclusions'><h2>Overall Conclusions</h2><p>No specific overall conclusions or key findings were generated based on the current data and significance criteria. Please review the detailed statistical tests and metric comparisons for more granular insights.</p></div>"
+
+        html = "<div class='overall-conclusions'>"
+        html += "<h2>Overall Conclusions & Key Findings</h2>"
+        
+        overall_best = conclusions.get("overall_best_method")
+        if overall_best:
+            html += f"<p><strong>Overall Most Effective Prompting Technique:</strong> {overall_best}</p>"
+        else:
+            html += "<p><strong>Overall Most Effective Prompting Technique:</strong> Not definitively identified based on current criteria.</p>"
+        
+        key_findings = conclusions.get("key_findings", [])
+        if key_findings:
+            html += "<h3>Key Findings:</h3><ul>"
+            for finding in key_findings:
+                html += f"<li>{finding}</li>"
+            html += "</ul>"
+        else:
+            html += "<p>No specific key findings were highlighted.</p>"
+            
+        html += "</div>"
+        return html
+
     def _generate_evidence_section(
         self,
         conclusions: Dict[str, Any],
@@ -429,7 +475,8 @@ class StatisticalAnalyzer:
             </div>
             
             <h3>Statistical Significance Tests</h3>
-            <div class="tabset" id="evidence-tabs">
+            <div style=\"max-height: 400px; overflow-y: auto;\">
+            <div class=\"tabset\" id=\"evidence-tabs\">
         """
         
         # Add tabs for each metric
@@ -482,6 +529,7 @@ class StatisticalAnalyzer:
                 html += "<p>No statistically significant differences found.</p>\n"
             
             html += "</div>\n"  # Close tab content
+        html += "</div>\n" # Close scrollable div for statistical significance tests
         
         # Method scores section
         html += """
