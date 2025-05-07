@@ -4,8 +4,8 @@ Role-based hypothesis experiment runner module.
 from typing import Dict, Any
 
 from .base_runner import BaseExperimentRunner
-from src.prompts.scientific_prompts import generate_scientific_system_prompt
-from src.prompts.role_based_prompts import generate_role_based_prompt
+from prompts.scientific_prompts import generate_scientific_system_prompt
+from prompts.role_based_prompts import generate_role_based_prompt
 
 
 class RoleBasedHypothesisRunner(BaseExperimentRunner):

@@ -42,6 +42,22 @@ class CrossExperimentAnalyzer:
         self.experiment_metrics = {}
         self.analysis_results = {}
     
+    def _convert_numpy_types_to_python(self, data: Any) -> Any:
+        """Recursively convert NumPy types (like np.bool_) to native Python types for JSON serialization."""
+        if isinstance(data, list):
+            return [self._convert_numpy_types_to_python(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: self._convert_numpy_types_to_python(value) for key, value in data.items()}
+        elif isinstance(data, np.bool_):
+            return bool(data)
+        elif isinstance(data, (np.integer, np.int_)):
+            return int(data)
+        elif isinstance(data, (np.floating, np.float_)):
+            return float(data)
+        elif pd.isna(data): # Handle Pandas NaT or other NA types if they sneak in
+            return None
+        return data
+    
     def find_experiment_directories(self, experiment_types: Optional[List[str]] = None) -> List[str]:
         """
         Find experiment result directories.
@@ -206,22 +222,29 @@ class CrossExperimentAnalyzer:
             if exp_data["csv_data"] is not None:
                 csv_data = exp_data["csv_data"]
                 
-                # Get the raw similarity lists if they exist
-                for metric in ["cosine_similarities", "self_bleu_scores", "bertscore_scores"]:
-                    if metric in csv_data.columns:
+                # Map CSV column name to internal raw metric key name for pairwise scores
+                # The CSV stores lists of pairwise scores under these 'avg_...' names.
+                csv_to_raw_metric_map = {
+                    "avg_cosine_similarity": "raw_cosine_similarities",
+                    "avg_self_bleu": "raw_self_bleu_scores",
+                    "avg_bertscore": "raw_bertscore_scores"
+                }
+
+                for csv_col_name, raw_metric_key in csv_to_raw_metric_map.items():
+                    if csv_col_name in csv_data.columns:
                         # These might be stored as string representations of lists
                         try:
                             # If the column contains string representations of lists
-                            if isinstance(csv_data[metric].iloc[0], str):
-                                raw_scores = eval(csv_data[metric].iloc[0])
+                            if isinstance(csv_data[csv_col_name].iloc[0], str):
+                                raw_scores = eval(csv_data[csv_col_name].iloc[0])
                             # If the column contains actual lists
                             else:
-                                raw_scores = csv_data[metric].iloc[0]
+                                raw_scores = csv_data[csv_col_name].iloc[0]
                             
                             if isinstance(raw_scores, list):
-                                exp_metrics[f"raw_{metric}"] = raw_scores
-                        except (SyntaxError, ValueError, IndexError) as e:
-                            print(f"[WARNING] Could not parse {metric} from CSV: {e}")
+                                exp_metrics[raw_metric_key] = raw_scores # Store as "raw_cosine_similarities", etc.
+                        except (SyntaxError, ValueError, IndexError, TypeError) as e:
+                            print(f"[WARNING] Could not parse {csv_col_name} from CSV for {exp_name}: {e}")
                 
                 # Get KDE data if available
                 if "kde_values" in csv_data.columns:
@@ -363,6 +386,9 @@ class CrossExperimentAnalyzer:
                             
                             cohen_d = (mean1 - mean2) / pooled_std if pooled_std != 0 else 0
                             
+                            # Perform 2-sample Kolmogorov-Smirnov test
+                            ks_stat, ks_p = stats.ks_2samp(scores1, scores2)
+                            
                             # Store results
                             test_results[f"{exp1} vs {exp2}"] = {
                                 "mann_whitney": {
@@ -374,6 +400,11 @@ class CrossExperimentAnalyzer:
                                     "statistic": float(t_stat),
                                     "p_value": float(t_p),
                                     "significant": t_p < 0.05
+                                },
+                                "ks_test": {
+                                    "statistic": float(ks_stat),
+                                    "p_value": float(ks_p),
+                                    "significant": ks_p < 0.05
                                 },
                                 "effect_size": {
                                     "cohen_d": float(cohen_d),
@@ -858,6 +889,8 @@ class CrossExperimentAnalyzer:
                         <th>Significant?</th>
                         <th>t-test p-value</th>
                         <th>Significant?</th>
+                        <th>KS Test p-value</th>
+                        <th>Significant?</th>
                         <th>Effect Size (Cohen's d)</th>
                         <th>Interpretation</th>
                     </tr>
@@ -866,6 +899,7 @@ class CrossExperimentAnalyzer:
                 for comparison, test_results in tests.items():
                     mw_test = test_results["mann_whitney"]
                     t_test = test_results["t_test"]
+                    ks_test = test_results.get("ks_test", {"p_value": np.nan, "significant": False}) # Handle missing ks_test for older data
                     effect_size = test_results["effect_size"]
                     
                     html_content += f"""
@@ -875,6 +909,8 @@ class CrossExperimentAnalyzer:
                         <td>{"Yes" if mw_test['significant'] else "No"}</td>
                         <td>{t_test['p_value']:.4f}</td>
                         <td>{"Yes" if t_test['significant'] else "No"}</td>
+                        <td>{ks_test['p_value']:.4f}</td>
+                        <td>{"Yes" if ks_test['significant'] else "No"}</td>
                         <td>{effect_size['cohen_d']:.4f}</td>
                         <td>{effect_size['interpretation']}</td>
                     </tr>
@@ -965,6 +1001,9 @@ class CrossExperimentAnalyzer:
             elif isinstance(value, dict):
                 serializable_results[key] = value
         
+        # Convert any lingering numpy types (especially np.bool_) to Python native types
+        serializable_results = self._convert_numpy_types_to_python(serializable_results)
+
         with open(json_path, "w") as f:
             json.dump(serializable_results, f, indent=2)
         

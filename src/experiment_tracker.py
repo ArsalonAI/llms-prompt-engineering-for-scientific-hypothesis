@@ -49,6 +49,10 @@ class ExperimentTracker:
                         model_name: str = None,
                         config: Dict[str, Any] = None):
         """Start tracking a new experiment."""
+        if self.current_experiment is not None:
+            print(f"[INFO] Automatically ending previous experiment: {self.current_experiment['name']} before starting {experiment_name}")
+            self.end_experiment()
+
         self._experiment_type = experiment_type
         self._step = 0
         self._start_time = time.time()  # Record start time for runtime tracking

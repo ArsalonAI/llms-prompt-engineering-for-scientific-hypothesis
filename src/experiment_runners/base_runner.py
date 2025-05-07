@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Dict, Any, List, Callable, Union
 
-from src.experiment_tracker import ExperimentTracker
+from experiment_tracker import ExperimentTracker
 
 
 class BaseExperimentRunner:
@@ -123,7 +123,7 @@ class BaseExperimentRunner:
         Returns:
             Dictionary containing experiment results
         """
-        from src.experiment_runner_templates import run_idea_generation_batch
+        from experiment_runner_templates import run_idea_generation_batch
         
         # Run the experiment using the existing function
         results = run_idea_generation_batch(

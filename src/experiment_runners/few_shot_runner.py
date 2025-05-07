@@ -4,8 +4,8 @@ Few-shot hypothesis experiment runner module.
 from typing import Dict, Any
 
 from .base_runner import BaseExperimentRunner
-from src.prompts.scientific_prompts import generate_scientific_system_prompt
-from src.prompts.few_shot_prompts import generate_few_shot_prompt
+from prompts.scientific_prompts import generate_scientific_system_prompt
+from prompts.few_shot_prompts import generate_few_shot_prompt
 
 
 class FewShotHypothesisRunner(BaseExperimentRunner):

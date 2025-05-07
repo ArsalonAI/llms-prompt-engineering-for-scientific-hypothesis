@@ -14,8 +14,8 @@ from experiment_runners import (
     RoleBasedHypothesisRunner,
     FewShotHypothesisRunner
 )
-from src.statistical_analysis import StatisticalAnalyzer
-from src.cross_experiment_analysis.runner import run_cross_experiment_analysis
+from statistical_analysis import StatisticalAnalyzer
+from cross_experiment_analysis.runner import run_cross_experiment_analysis
 
 # Get the absolute path to the src directory
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -145,6 +145,27 @@ def main():
     for recommendation in conclusions["recommendations"]:
         print(f"- {recommendation}")
     
+    # Print detailed statistical test results
+    print("\n=== Detailed Statistical Test Results ===")
+    if "statistical_tests" in analysis_results.get("comparison_results", {}):
+        for metric, tests in analysis_results["comparison_results"]["statistical_tests"].items():
+            print(f"\n--- {metric.title()} --- ")
+            header = "Comparison".ljust(50) + "MW p-val".ljust(12) + "T-Test p-val".ljust(15) + "KS p-val".ljust(12) + "Effect Size".ljust(15) + "Interpretation"
+            print(header)
+            print("-" * len(header))
+            if not tests:
+                print("No pairwise comparisons available for this metric.")
+                continue
+            for comparison, result in tests.items():
+                mw_p = result.get("mann_whitney", {}).get("p_value", float('nan'))
+                t_p = result.get("t_test", {}).get("p_value", float('nan'))
+                ks_p = result.get("ks_test", {}).get("p_value", float('nan')) 
+                cohen_d = result.get("effect_size", {}).get("cohen_d", float('nan'))
+                interpretation = result.get("effect_size", {}).get("interpretation", "N/A")
+                print(f"{comparison.ljust(50)}{mw_p:<12.4f}{t_p:<15.4f}{ks_p:<12.4f}{cohen_d:<15.4f}{interpretation}")
+    else:
+        print("No statistical test results available.")
+
     # Print dashboard path
     dashboard_path = analysis_results["dashboard_path"]
     print(f"\nView statistical analysis dashboard at: file://{os.path.abspath(dashboard_path)}")

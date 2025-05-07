@@ -4,7 +4,7 @@ Scientific hypothesis experiment runner module.
 from typing import Dict, Any, Optional
 
 from .base_runner import BaseExperimentRunner
-from src.prompts.scientific_prompts import generate_scientific_system_prompt, generate_scientific_hypothesis_prompt
+from prompts.scientific_prompts import generate_scientific_system_prompt, generate_scientific_hypothesis_prompt
 
 
 class ScientificHypothesisRunner(BaseExperimentRunner):
@@ -14,7 +14,7 @@ class ScientificHypothesisRunner(BaseExperimentRunner):
         super().__init__(*args, **kwargs)
         # Initialize HypothesisEvaluator if needed
         try:
-            from src.HypothesisEvaluator import HypothesisEvaluator
+            from HypothesisEvaluator import HypothesisEvaluator
             self.evaluator = HypothesisEvaluator()
         except ImportError:
             print("[WARNING] HypothesisEvaluator not available. Using default quality evaluation.")

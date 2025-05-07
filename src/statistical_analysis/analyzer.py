@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from typing import Dict, List, Any, Optional, Tuple
-from ..cross_experiment_analysis.analyzer import CrossExperimentAnalyzer
+from cross_experiment_analysis.analyzer import CrossExperimentAnalyzer
 
 class StatisticalAnalyzer:
     """Analyzer for performing statistical tests and generating research-grade reports."""
@@ -86,37 +86,76 @@ class StatisticalAnalyzer:
         """
         extended_stats = {}
         
+        # Define which metrics are actual analysis metrics vs metadata
+        # Only calculate statistics on these known metric fields
+        analysis_metrics = ["cosine", "self_bleu", "bertscore", 
+                           "context_cosine_mean", "context_self_bleu_mean", "context_bertscore_mean",
+                           "pairwise_cosine_similarity", "pairwise_self_bleu", "pairwise_bertscore"]
+        
         for metric_name, metric_data in metrics.items():
+            # Skip non-analysis metrics (metadata fields)
+            if metric_name not in analysis_metrics and not any(metric_name.startswith(prefix) for prefix in ["cosine", "self_bleu", "bertscore"]):
+                continue
+                
             extended_stats[metric_name] = {}
             
             for exp_type, values in metric_data.items():
                 if not values:
                     continue
                 
-                # Convert to numpy array if it's a list
-                data = np.array(values)
+                # Check if values is already a number (not iterable)
+                if isinstance(values, (int, float)):
+                    # If it's a single number, create a list with this value
+                    numeric_values = [float(values)]
+                elif not hasattr(values, '__iter__') or isinstance(values, str):
+                    # Skip non-iterable values or strings
+                    print(f"[WARNING] Skipping non-iterable value in {metric_name} for {exp_type}: {values}")
+                    continue
+                else:
+                    # Ensure values are numeric - filter out any non-numeric values
+                    numeric_values = []
+                    for val in values:
+                        try:
+                            # Try to convert to float
+                            numeric_val = float(val)
+                            numeric_values.append(numeric_val)
+                        except (ValueError, TypeError):
+                            # Skip non-numeric values
+                            print(f"[WARNING] Skipping non-numeric value in {metric_name} for {exp_type}: {val}")
+                            continue
                 
-                # Calculate extended statistics
-                stats_dict = {
-                    "mean": np.mean(data),
-                    "median": np.median(data),
-                    "std": np.std(data),
-                    "min": np.min(data),
-                    "max": np.max(data),
-                    "q1": np.percentile(data, 25),
-                    "q3": np.percentile(data, 75),
-                    "iqr": np.percentile(data, 75) - np.percentile(data, 25),
-                    "skewness": stats.skew(data),
-                    "kurtosis": stats.kurtosis(data),
-                    "shapiro_test": {
-                        "statistic": stats.shapiro(data)[0],
-                        "p_value": stats.shapiro(data)[1],
-                        "is_normal": stats.shapiro(data)[1] > 0.05
-                    },
-                    "confidence_interval_95": stats.norm.interval(0.95, loc=np.mean(data), scale=stats.sem(data))
-                }
+                if not numeric_values:
+                    print(f"[WARNING] No numeric values found in {metric_name} for {exp_type}. Skipping statistics calculation.")
+                    continue
                 
-                extended_stats[metric_name][exp_type] = stats_dict
+                # Convert to numpy array of numeric values
+                data = np.array(numeric_values)
+                
+                try:
+                    # Calculate extended statistics
+                    stats_dict = {
+                        "mean": np.mean(data),
+                        "median": np.median(data),
+                        "std": np.std(data),
+                        "min": np.min(data),
+                        "max": np.max(data),
+                        "q1": np.percentile(data, 25),
+                        "q3": np.percentile(data, 75),
+                        "iqr": np.percentile(data, 75) - np.percentile(data, 25),
+                        "skewness": stats.skew(data) if len(data) >= 3 else None,
+                        "kurtosis": stats.kurtosis(data) if len(data) >= 4 else None,
+                        "shapiro_test": {
+                            "statistic": stats.shapiro(data)[0] if len(data) >= 3 else None,
+                            "p_value": stats.shapiro(data)[1] if len(data) >= 3 else None,
+                            "is_normal": stats.shapiro(data)[1] > 0.05 if len(data) >= 3 else None
+                        },
+                        "confidence_interval_95": stats.norm.interval(0.95, loc=np.mean(data), scale=stats.sem(data)) if len(data) > 1 else (None, None)
+                    }
+                    
+                    extended_stats[metric_name][exp_type] = stats_dict
+                except Exception as e:
+                    print(f"[WARNING] Error calculating statistics for {metric_name} ({exp_type}): {str(e)}")
+                    continue
         
         return extended_stats
     
@@ -140,38 +179,61 @@ class StatisticalAnalyzer:
             significant_diffs[metric] = []
             
             for comparison, result in tests.items():
-                # Check if difference is statistically significant
-                is_significant = (
-                    result["mann_whitney"]["significant"] or 
-                    result["t_test"]["significant"]
-                )
-                
-                # Check if effect size is meaningful
-                effect_size = result["effect_size"]["cohen_d"]
-                meaningful_effect = abs(effect_size) > 0.5
-                
-                if is_significant and meaningful_effect:
-                    # Parse experiment types from comparison string (e.g., "Type1 vs Type2")
-                    exp_types = comparison.split(" vs ")
-                    if len(exp_types) != 2:
+                try:
+                    # Check if difference is statistically significant
+                    is_significant = (
+                        result["mann_whitney"]["significant"] or 
+                        result["t_test"]["significant"] or
+                        result.get("ks_test", {}).get("significant", False)  # Add KS test significance
+                    )
+                    
+                    # Convert effect size to float if it's a string
+                    effect_size_raw = result["effect_size"]["cohen_d"]
+                    try:
+                        effect_size = float(effect_size_raw)
+                    except (ValueError, TypeError):
+                        print(f"[WARNING] Invalid effect size in {metric} for {comparison}: {effect_size_raw}")
                         continue
+                        
+                    meaningful_effect = abs(effect_size) > 0.5
                     
-                    # Determine which method is better based on metric and effect size
-                    # For cosine and self-bleu, lower is better (negative effect size means second method is better)
-                    # For bertscore, higher is better (positive effect size means first method is better)
-                    if metric in ["cosine", "self_bleu"]:
-                        better_method = exp_types[1] if effect_size > 0 else exp_types[0]
-                    else:  # bertscore
-                        better_method = exp_types[0] if effect_size > 0 else exp_types[1]
-                    
-                    significant_diffs[metric].append({
-                        "comparison": comparison,
-                        "effect_size": effect_size,
-                        "effect_interpretation": result["effect_size"]["interpretation"],
-                        "p_value_mw": result["mann_whitney"]["p_value"],
-                        "p_value_t": result["t_test"]["p_value"],
-                        "better_method": better_method
-                    })
+                    if is_significant:
+                        # Parse experiment types from comparison string (e.g., "Type1 vs Type2")
+                        exp_types = comparison.split(" vs ")
+                        if len(exp_types) != 2:
+                            continue
+                        
+                        # Determine which method is better based on metric and effect size
+                        # For cosine and self-bleu, lower is better (negative effect size means second method is better)
+                        # For bertscore, higher is better (positive effect size means first method is better)
+                        if metric in ["cosine", "self_bleu"]:
+                            better_method = exp_types[1] if effect_size > 0 else exp_types[0]
+                        else:  # bertscore
+                            better_method = exp_types[0] if effect_size > 0 else exp_types[1]
+                        
+                        # Ensure p-values are numeric
+                        try:
+                            p_value_mw = float(result["mann_whitney"]["p_value"])
+                            p_value_t = float(result["t_test"]["p_value"])
+                            p_value_ks = float(result.get("ks_test", {}).get("p_value", 1.0)) # Add KS p-value, default to 1.0 if not present
+                        except (ValueError, TypeError):
+                            print(f"[WARNING] Invalid p-values in {metric} for {comparison}")
+                            p_value_mw = 1.0  # Default to non-significant
+                            p_value_t = 1.0   # Default to non-significant
+                            p_value_ks = 1.0  # Default to non-significant
+                        
+                        significant_diffs[metric].append({
+                            "comparison": comparison,
+                            "effect_size": effect_size,
+                            "effect_interpretation": result["effect_size"]["interpretation"],
+                            "p_value_mw": p_value_mw,
+                            "p_value_t": p_value_t,
+                            "p_value_ks": p_value_ks, # Add KS p-value
+                            "better_method": better_method
+                        })
+                except Exception as e:
+                    print(f"[WARNING] Error processing {metric} comparison {comparison}: {str(e)}")
+                    continue
         
         return significant_diffs
     
@@ -224,7 +286,11 @@ class StatisticalAnalyzer:
                 conclusions["method_scores"][better_method] = conclusions["method_scores"].get(better_method, 0) + 1
                 
                 # Record the finding
-                finding = f"{better_method} is significantly better than {worse_method} for {metric} (p={min(diff['p_value_mw'], diff['p_value_t']):.4f}, effect size={abs(diff['effect_size']):.2f})"
+                finding = (
+                    f"{better_method} is significantly better than {worse_method} for {metric} "
+                    f"(p_mw={diff['p_value_mw']:.4f}, p_t={diff['p_value_t']:.4f}, p_ks={diff['p_value_ks']:.4f}, "
+                    f"effect size={abs(diff['effect_size']):.2f})"
+                )
                 metric_conclusions["significant_findings"].append(finding)
                 
                 # Add to detailed comparisons
@@ -351,6 +417,7 @@ class StatisticalAnalyzer:
             <h2>Statistical Evidence and Conclusions</h2>
             <div class="summary">
                 <h3>Key Findings</h3>
+                <p>This section highlights the main conclusions drawn from statistically significant differences (p < 0.05 via Mann-Whitney U, T-Test, or KS Test) observed between different prompting strategies. An effect size (Cohen's d) is also considered to assess the magnitude of these differences.</p>
                 <ul>
         """
         
@@ -393,6 +460,7 @@ class StatisticalAnalyzer:
                             <th>Interpretation</th>
                             <th>Mann-Whitney p-value</th>
                             <th>t-test p-value</th>
+                            <th>KS Test p-value</th>
                         </tr>
                 """
                 
@@ -405,6 +473,7 @@ class StatisticalAnalyzer:
                             <td>{diff["effect_interpretation"]}</td>
                             <td>{diff["p_value_mw"]:.4f}</td>
                             <td>{diff["p_value_t"]:.4f}</td>
+                            <td>{diff["p_value_ks"]:.4f}</td>
                         </tr>
                     """
                 
@@ -417,6 +486,7 @@ class StatisticalAnalyzer:
         # Method scores section
         html += """
             <h3>Method Effectiveness (Based on Statistical Significance)</h3>
+            <p>The table below scores methods based on the number of times they were found to be statistically superior for any given metric. This provides an overview of which methods tend to outperform others across the board.</p>
             <div class="method-scores">
                 <table class="stat-table">
                     <tr>
@@ -456,6 +526,7 @@ class StatisticalAnalyzer:
             </div>
             
             <h3>Recommendations</h3>
+            <p>Based on the analysis, the following recommendations are suggested. Note that these are conditional on the presence of statistically significant findings and effect sizes.</p>
             <div class="recommendations">
                 <ul>
         """
@@ -482,6 +553,7 @@ class StatisticalAnalyzer:
         """
         html = """
             <h2>Extended Statistical Measures</h2>
+            <p>This section provides a deeper dive into the statistical properties of each metric for each experiment type. It includes measures of central tendency, dispersion, normality tests (Shapiro-Wilk), and confidence intervals, which can offer further insights beyond basic comparisons.</p>
             <div class="tabset" id="stats-tabs">
         """
         
