@@ -83,7 +83,16 @@ class BaseExperimentRunner:
         run_id = self.tracker.generate_run_id("run")
         
         # Create context from paper content
-        context = f"Abstract: {paper_content['abstract']}\nMethods: {paper_content['methods']}"
+        # Use .get() for safety in case keys are missing from paper_content
+        abstract_content = paper_content.get('abstract', '')
+        methods_content = paper_content.get('methods', '')
+        context = f"Abstract: {abstract_content}\nMethods: {methods_content}"
+        preview = context[:100].replace('\n', ' ')
+        print(f"[DEBUG] BaseExperimentRunner: Generated context string. Length: {len(context)}. Preview: '{preview}...'" )
+        if not abstract_content:
+            print("[WARNING] BaseExperimentRunner: Abstract missing or empty from paper_content.")
+        if not methods_content:
+            print("[WARNING] BaseExperimentRunner: Methods missing or empty from paper_content.")
         
         # Run the experiment batch
         start_time = time.time()

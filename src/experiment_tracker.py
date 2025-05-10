@@ -60,39 +60,59 @@ class ExperimentTracker:
         # Define dtypes for a more robust DataFrame initialization
         # This helps prevent dtype-related warnings during pd.concat in log_result
         results_df_dtypes = {
-            'step': pd.Int64Dtype(), 
-            'run_id': str,
-            'idea': str,            
-            'batch_prompt': str,  
-            'evaluation': str,      
-            'evaluation_full': str, 
-            'avg_cosine_similarity': object, # Stores list of raw pairwise scores
-            'avg_self_bleu': object,       # Stores list of raw pairwise scores
-            'avg_bertscore': object,       # Stores list of raw pairwise scores
-            'context_cosine': object,       # Stores list of raw context scores for cosine
-            'context_self_bleu': object,    # Stores list of raw context scores for self_bleu
-            'context_bertscore': object,    # Stores list of raw context scores for bertscore
-            'timestamp': str, 
-            'model': str, 
-            'prompt': str, 
-            'context': str, # This is the main paper context string
-            'num_ideas': pd.Int64Dtype(), 
-            'quality_scores': object, 
-            # Raw score lists (if run_idea_generation_batch provides them with these exact keys for df population)
-            # These are the keys `log_result` will look for in the `result` dict to populate df_row.
-            # `run_idea_generation_batch` now provides `context_..._scores_raw` and the pairwise lists directly.
-            'cosine_similarities': object, # Raw pairwise list
-            'self_bleu_scores': object,    # Raw pairwise list
-            'bertscore_scores': object,    # Raw pairwise list
-            'context_cosine_scores_raw': object, 
-            'context_self_bleu_scores_raw': object, 
-            'context_bertscore_scores_raw': object, 
-            'has_kde_data': bool,
-            'runtime_seconds': float,  # Add tracking for runtime
-            'pairwise_pairs_compared': object # Stores the list of (i,j) tuples for actual pairwise comparisons
+            "run_id": str,
+            "timestamp": str,
+            "model": str,
+            "prompt": str,
+            "context": str,
+            "num_ideas": pd.Int64Dtype(), # Allows for NA
+            "ideas": object, # List of strings
+            "quality_scores": object, # List of dicts or relevant type
+            
+            # Pairwise raw scores (original names from log_data)
+            "cosine_similarities": object, # List of floats
+            "self_bleu_scores": object,    # List of floats
+            "bertscore_scores": object,  # List of floats
+            
+            # Pairwise aggregated scores
+            "avg_pairwise_cosine_similarity": float,
+            "avg_pairwise_self_bleu": float,
+            "avg_pairwise_bertscore": float,
+            "std_pairwise_cosine": float,
+            "std_pairwise_self_bleu": float,
+            "std_pairwise_bertscore": float,
+
+            # Context raw scores
+            "context_cosine_scores_raw": object,    # List of floats
+            "context_self_bleu_scores_raw": object, # List of floats
+            "context_bertscore_scores_raw": object, # List of floats
+
+            # Context aggregated scores
+            "avg_context_cosine_similarity": float,
+            "avg_context_self_bleu_similarity": float,
+            "avg_context_bertscore_similarity": float,
+            
+            # KDE values (can be complex, store as object)
+            "kde_values": object, # Dict of dicts of lists
+            "has_kde_data": bool,
+
+            # Pairwise comparison details
+            "pairwise_sampled": bool,
+            "pairwise_sampling_strategy": str,
+            "pairwise_total_possible": pd.Int64Dtype(),
+            "pairwise_actual": pd.Int64Dtype(),
+            "pairwise_pairs_compared": object, # List of tuples
+
+            # Performance
+            "runtime_seconds": float,
+            "seconds_per_idea": float,
+            
+            # Placeholders for other potential direct log_data items if needed
+            "batch_prompt": str, # Example, if used
+            "evaluation": str,   # Example, if used at this top level
+            "evaluation_full": str # Example, if used at this top level
         }
-        # Initialize results DataFrame with all required columns and dtypes
-        self._results_df = pd.DataFrame(columns=list(results_df_dtypes.keys()))
+        self._results_df = pd.DataFrame(columns=results_df_dtypes.keys()).astype(results_df_dtypes)
         for col, dtype in results_df_dtypes.items():
             # Ensure column exists before trying to astype; pd.DataFrame(columns=...) creates them
             if col in self._results_df.columns:
@@ -150,47 +170,57 @@ class ExperimentTracker:
         
         # Prepare data for DataFrame
         df_row = {
-            'timestamp': timestamp,
-            'step': self._step,
             'run_id': run_id,
-            'model': result.get('model', 'N/A'),
-            'prompt': result.get('prompt', 'N/A'),
-            'context': result.get('context', 'N/A'),
-            'num_ideas': result.get('num_ideas', 0),
-            
-            # Store the raw lists of scores directly. _calculate_similarity_stats will process these.
-            'avg_cosine_similarity': result.get('cosine_similarities'), # Was avg_pairwise_cosine_similarity
-            'avg_self_bleu': result.get('self_bleu_scores'),       # Was avg_pairwise_self_bleu
-            'avg_bertscore': result.get('bertscore_scores'),       # Was avg_pairwise_bertscore
-            
-            'context_cosine': result.get('context_cosine_scores_raw'), # List of context cosine for each idea
-            'context_self_bleu': result.get('context_self_bleu_scores_raw', []), # Expecting a list, default to empty if not present
-            'context_bertscore': result.get('context_bertscore_scores_raw', [])  # Expecting a list, default to empty if not present
+            'timestamp': datetime.now().isoformat(),
+            'step': self._step,
+            'model': result.get('model'),
+            'prompt': result.get('prompt'),
+            'context': result.get('context'),
+            'num_ideas': result.get('num_ideas'),
+            # Add aggregated metrics directly (these are single values per run)
+            'avg_pairwise_cosine_similarity': result.get('avg_pairwise_cosine_similarity'),
+            'avg_pairwise_self_bleu': result.get('avg_pairwise_self_bleu'),
+            'avg_pairwise_bertscore': result.get('avg_pairwise_bertscore'),
+            'std_pairwise_cosine': result.get('std_pairwise_cosine'),
+            'std_pairwise_self_bleu': result.get('std_pairwise_self_bleu'),
+            'std_pairwise_bertscore': result.get('std_pairwise_bertscore'),
+            'avg_context_cosine_similarity': result.get('avg_context_cosine_similarity'),
+            'avg_context_self_bleu_similarity': result.get('avg_context_self_bleu_similarity'),
+            'avg_context_bertscore_similarity': result.get('avg_context_bertscore_similarity'),
+            'runtime_seconds': result.get('runtime_seconds'),
+            'seconds_per_idea': result.get('seconds_per_idea'),
+            'pairwise_sampled': result.get('pairwise_sampled'),
+            'pairwise_sampling_strategy': result.get('pairwise_sampling_strategy'),
+            'pairwise_total_possible': result.get('pairwise_total_possible'),
+            'pairwise_actual': result.get('pairwise_actual')
         }
-        
-        # Add other raw lists and specific items like quality_scores, kde_values etc.
-        # This part populates columns that might be lists (e.g. quality_scores can be list of dicts)
-        # or other objects.
-        # The keys here should match column names defined in results_df_dtypes in start_experiment.
-        for key in ['ideas', 'quality_scores', 'has_kde_data', 'batch_prompt', 'evaluation', 'evaluation_full', 'pairwise_pairs_compared']:
+
+        # Explicitly copy critical raw score lists and other potentially complex objects
+        # This ensures they are in df_row if present in the result dict
+        critical_list_keys = [
+            'ideas', 'quality_scores', 
+            'cosine_similarities', 'self_bleu_scores', 'bertscore_scores', # Pairwise raw
+            'context_cosine_scores_raw', 'context_self_bleu_scores_raw', 'context_bertscore_scores_raw', # Context raw
+            'kde_values', 'pairwise_pairs_compared'
+        ]
+        for key in critical_list_keys:
+            if key in result:
+                df_row[key] = result[key]
+            # If not in result, it will be NaN by the later loop that aligns with self._results_df.columns
+
+        # Add other specific items that might not be lists or are handled uniquely
+        # Ensure these keys match columns defined in results_df_dtypes in start_experiment.
+        other_specific_keys = ['batch_prompt', 'evaluation', 'evaluation_full'] # Example keys from previous code
+        for key in other_specific_keys:
             if key in result:
                 df_row[key] = result.get(key)
-            elif key == 'has_kde_data':
-                df_row[key] = True if 'kde_values' in result else False
         
-        # Note: 'cosine_similarities', 'self_bleu_scores', 'bertscore_scores', 'context_cosine_scores_raw'
-        # are now directly assigned to avg_cosine_similarity, avg_self_bleu, etc. above.
-        # If you need to keep *both* the averaged values (if calculated in run_idea_generation_batch)
-        # AND the raw lists under different column names in the CSV, the df_row and results_df_dtypes need adjustment.
-        # Current approach: the "avg_" columns now hold lists for _calculate_similarity_stats to process.
-
-        # The following loop for adding lists to df_row might be redundant if already handled above
-        # for key in ['quality_scores', 'cosine_similarities', 'self_bleu_scores', 'bertscore_scores', 'context_cosine_scores_raw']:
-        #     if key in result:
-        #         df_row[key] = result[key]
+        if 'kde_values' in result: # Handled by critical_list_keys now
+            df_row['has_kde_data'] = True
+        elif 'has_kde_data' not in df_row: # Ensure column exists if kde_values wasn't in result
+             df_row['has_kde_data'] = False
 
         # Ensure all columns defined in dtypes are present in df_row, adding NaN if missing
-        # This is important if the `result` dict from run_idea_generation_batch is sparse.
         expected_cols = self._results_df.columns # Get columns from the pre-defined DataFrame structure
         for col in expected_cols:
             if col not in df_row:

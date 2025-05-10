@@ -224,28 +224,80 @@ class CrossExperimentAnalyzer:
                 
                 # Map CSV column name to internal raw metric key name for pairwise scores
                 # The CSV stores lists of pairwise scores under these 'avg_...' names.
-                csv_to_raw_metric_map = {
-                    "avg_cosine_similarity": "raw_cosine_similarities",
-                    "avg_self_bleu": "raw_self_bleu_scores",
-                    "avg_bertscore": "raw_bertscore_scores"
+                # These are actually the raw lists if `log_result` in ExperimentTracker uses these keys for raw lists.
+                # Let's ensure consistency: `run_idea_generation_batch` logs e.g. "cosine_similarities" (raw list)
+                # and "avg_pairwise_cosine_similarity" (float). `ExperimentTracker` should save both if dtypes are defined.
+                # The dtypes now reflect this separation. `extract_metrics` should read the raw list columns.
+                csv_to_raw_pairwise_metric_map = {
+                    "cosine_similarities": "raw_pairwise_cosine", # Key in CSV : Key in exp_metrics
+                    "self_bleu_scores": "raw_pairwise_self_bleu",
+                    "bertscore_scores": "raw_pairwise_bertscore"
                 }
 
-                for csv_col_name, raw_metric_key in csv_to_raw_metric_map.items():
+                for csv_col_name, raw_metric_key in csv_to_raw_pairwise_metric_map.items():
                     if csv_col_name in csv_data.columns:
-                        # These might be stored as string representations of lists
                         try:
-                            # If the column contains string representations of lists
-                            if isinstance(csv_data[csv_col_name].iloc[0], str):
-                                raw_scores = eval(csv_data[csv_col_name].iloc[0])
-                            # If the column contains actual lists
+                            raw_scores_str = csv_data[csv_col_name].iloc[0]
+                            if pd.isna(raw_scores_str):
+                                print(f"[DEBUG] Raw pairwise scores for '{csv_col_name}' in {exp_name} are NaN. Storing as empty list.")
+                                raw_scores = []
+                            elif isinstance(raw_scores_str, str):
+                                raw_scores = eval(raw_scores_str)
+                            elif isinstance(raw_scores_str, list): # Already a list (less likely from CSV but handle)
+                                raw_scores = raw_scores_str
                             else:
-                                raw_scores = csv_data[csv_col_name].iloc[0]
+                                print(f"[WARNING] Unexpected type for raw pairwise scores '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}. Storing as empty list.")
+                                raw_scores = []
                             
                             if isinstance(raw_scores, list):
-                                exp_metrics[raw_metric_key] = raw_scores # Store as "raw_cosine_similarities", etc.
-                        except (SyntaxError, ValueError, IndexError, TypeError) as e:
-                            print(f"[WARNING] Could not parse {csv_col_name} from CSV for {exp_name}: {e}")
+                                exp_metrics[raw_metric_key] = raw_scores
+                                if not raw_scores:
+                                    print(f"[DEBUG] Parsed raw pairwise scores for '{csv_col_name}' in {exp_name} is an empty list.")
+                            else:
+                                print(f"[WARNING] Failed to parse raw pairwise scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
+                                exp_metrics[raw_metric_key] = []
+                        except Exception as e:
+                            print(f"[WARNING] Error parsing raw pairwise scores for '{csv_col_name}' in {exp_name}: {e}. Storing as empty list.")
+                            exp_metrics[raw_metric_key] = []
+                    else:
+                        print(f"[DEBUG] Pairwise raw score column '{csv_col_name}' not found in CSV for {exp_name}. Storing empty list for {raw_metric_key}.")
+                        exp_metrics[raw_metric_key] = []
                 
+                # NEW: Extract raw CONTEXT similarity scores from CSV data
+                csv_to_raw_context_metric_map = {
+                    "context_cosine_scores_raw": "raw_context_cosine",
+                    "context_self_bleu_scores_raw": "raw_context_self_bleu",
+                    "context_bertscore_scores_raw": "raw_context_bertscore"
+                }
+                for csv_col_name, raw_metric_key in csv_to_raw_context_metric_map.items():
+                    if csv_col_name in csv_data.columns:
+                        try:
+                            raw_scores_str = csv_data[csv_col_name].iloc[0]
+                            if pd.isna(raw_scores_str):
+                                print(f"[DEBUG] Raw context scores for '{csv_col_name}' in {exp_name} are NaN. Storing as empty list.")
+                                raw_scores = []
+                            elif isinstance(raw_scores_str, str):
+                                raw_scores = eval(raw_scores_str)
+                            elif isinstance(raw_scores_str, list):
+                                raw_scores = raw_scores_str
+                            else:
+                                print(f"[WARNING] Unexpected type for raw context scores '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}. Storing as empty list.")
+                                raw_scores = []
+                            
+                            if isinstance(raw_scores, list):
+                                exp_metrics[raw_metric_key] = raw_scores
+                                if not raw_scores:
+                                    print(f"[DEBUG] Parsed raw context scores for '{csv_col_name}' in {exp_name} is an empty list.")
+                            else:
+                                print(f"[WARNING] Failed to parse raw context scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
+                                exp_metrics[raw_metric_key] = []
+                        except Exception as e:
+                            print(f"[WARNING] Error parsing raw context scores '{csv_col_name}' in {exp_name}: {e}. Storing as empty list.")
+                            exp_metrics[raw_metric_key] = []
+                    else:
+                        print(f"[DEBUG] Context raw score column '{csv_col_name}' not found in CSV for {exp_name}. Storing empty list for {raw_metric_key}.")
+                        exp_metrics[raw_metric_key] = []
+
                 # Get KDE data if available
                 if "kde_values" in csv_data.columns:
                     try:
@@ -346,9 +398,9 @@ class CrossExperimentAnalyzer:
         
         # Perform statistical tests for raw similarity scores
         raw_metrics = {
-            "cosine": "raw_cosine_similarities",
-            "self_bleu": "raw_self_bleu_scores",
-            "bertscore": "raw_bertscore_scores"
+            "cosine": "raw_pairwise_cosine",
+            "self_bleu": "raw_pairwise_self_bleu",
+            "bertscore": "raw_pairwise_bertscore"
         }
         
         for metric_name, metric_key in raw_metrics.items():
@@ -451,73 +503,35 @@ class CrossExperimentAnalyzer:
         
         plot_paths = {}
         
-        # Create bar charts for context and pairwise metrics
-        for metric_type in ["context_metrics", "pairwise_metrics"]:
-            for metric_name, metric_data in self.analysis_results[metric_type].items():
-                # Create bar chart comparing means
-                if metric_data["mean"]:
-                    fig = go.Figure()
-                    
-                    # Add bars for each experiment type
-                    for exp_type, mean_value in metric_data["mean"].items():
-                        std_value = metric_data["std"].get(exp_type, 0)
-                        
-                        fig.add_trace(go.Bar(
-                            x=[exp_type],
-                            y=[mean_value],
-                            name=exp_type,
-                            error_y=dict(
-                                type='data',
-                                array=[std_value],
-                                visible=True
-                            )
-                        ))
-                    
-                    # Update layout
-                    metric_type_display = "Context" if metric_type == "context_metrics" else "Pairwise"
-                    fig.update_layout(
-                        title=f"{metric_type_display} {metric_name.title()} Comparison",
-                        xaxis_title="Experiment Type",
-                        yaxis_title=f"{metric_name.title()} Score",
-                        barmode='group',
-                        legend_title="Experiment Type"
-                    )
-                    
-                    # Save the plot
-                    plot_name = f"{metric_type.replace('_metrics', '')}_{metric_name}_comparison.html"
-                    plot_path = os.path.join(self.output_dir, "plots", plot_name)
-                    fig.write_html(plot_path)
-                    plot_paths[f"{metric_type}_{metric_name}"] = plot_path
-        
-        # Create box plots for raw similarity scores
-        raw_metrics = {
-            "cosine": "raw_cosine_similarities",
-            "self_bleu": "raw_self_bleu_scores",
-            "bertscore": "raw_bertscore_scores"
+        # Create box plots for raw similarity scores - RESTORING THIS BLOCK
+        raw_pairwise_metrics_config = {
+            "cosine": "raw_pairwise_cosine",
+            "self_bleu": "raw_pairwise_self_bleu",
+            "bertscore": "raw_pairwise_bertscore"
         }
         
-        for metric_name, metric_key in raw_metrics.items():
-            # Check which experiments have raw scores for this metric
+        for metric_name, metric_key in raw_pairwise_metrics_config.items():
             data_for_box = []
-            
-            for exp_name, exp_metrics in self.experiment_metrics.items():
-                if metric_key in exp_metrics and isinstance(exp_metrics[metric_key], list):
-                    # Create data for box plot
-                    exp_type = exp_metrics["type"]
-                    raw_scores = exp_metrics[metric_key]
-                    
-                    for score in raw_scores:
+            for exp_name, exp_metrics_data in self.experiment_metrics.items():
+                if metric_key in exp_metrics_data and isinstance(exp_metrics_data[metric_key], list):
+                    # Additional check and debug for box plots
+                    raw_scores_list_for_box = exp_metrics_data[metric_key]
+                    if not raw_scores_list_for_box:
+                        print(f"[DEBUG] Boxplot: No scores for metric '{metric_key}' in experiment '{exp_name}'. Skipping.")
+                        continue # Skip if list is empty
+
+                    exp_type = exp_metrics_data["type"]
+                    for score in raw_scores_list_for_box:
                         data_for_box.append({
                             "Experiment Type": exp_type,
                             "Score": score,
                             "Metric": metric_name.title()
                         })
+                elif metric_key not in exp_metrics_data:
+                     print(f"[DEBUG] Boxplot: Metric key '{metric_key}' not found in experiment_metrics for '{exp_name}'. Skipping.")
             
             if data_for_box:
-                # Create DataFrame for box plot
                 box_df = pd.DataFrame(data_for_box)
-                
-                # Create box plot
                 fig = px.box(
                     box_df, 
                     x="Experiment Type", 
@@ -526,71 +540,111 @@ class CrossExperimentAnalyzer:
                     title=f"{metric_name.title()} Distribution Comparison",
                     labels={"Score": f"{metric_name.title()} Score"}
                 )
-                
-                # Add individual points as a scatter plot
                 fig.add_trace(
                     go.Scatter(
                         x=box_df["Experiment Type"],
                         y=box_df["Score"],
                         mode="markers",
-                        marker=dict(
-                            color="rgba(0, 0, 0, 0.3)",
-                            size=4
-                        ),
+                        marker=dict(color="rgba(0, 0, 0, 0.3)", size=4),
                         name="Individual Scores"
                     )
                 )
-                
-                # Save the plot
                 plot_name = f"raw_{metric_name}_boxplot.html"
                 plot_path = os.path.join(self.output_dir, "plots", plot_name)
                 fig.write_html(plot_path)
                 plot_paths[f"raw_{metric_name}_boxplot"] = plot_path
         
-        # Create KDE plots for similarity distributions
-        for metric_name, metric_key in raw_metrics.items():
-            # Check which experiments have raw scores for this metric
-            exps_with_data = [exp for exp, data in self.experiment_metrics.items() 
-                             if metric_key in data and isinstance(data[metric_key], list)]
+        # Create KDE plots for (pairwise) similarity distributions - RESTORING THIS BLOCK
+        for metric_name, metric_key in raw_pairwise_metrics_config.items():
+            exps_with_data_for_kde = []
+            for exp_name, data in self.experiment_metrics.items():
+                if metric_key in data and isinstance(data[metric_key], list) and len(data[metric_key]) > 1:
+                    exps_with_data_for_kde.append(exp_name)
+                elif metric_key not in data:
+                    print(f"[DEBUG] Pairwise KDE: Metric key '{metric_key}' not found for experiment '{exp_name}'. Skipping KDE.")
+                elif not isinstance(data.get(metric_key), list):
+                    print(f"[DEBUG] Pairwise KDE: Data for '{metric_key}' in experiment '{exp_name}' is not a list ({type(data.get(metric_key))}). Skipping KDE.")
+                elif len(data.get(metric_key, [])) <= 1:
+                    print(f"[DEBUG] Pairwise KDE: Not enough data points ({len(data.get(metric_key, []))}) for '{metric_key}' in '{exp_name}'. Skipping KDE.")
             
-            if exps_with_data:
+            if exps_with_data_for_kde:
                 fig = go.Figure()
-                
-                for exp_name in exps_with_data:
-                    exp_metrics = self.experiment_metrics[exp_name]
-                    exp_type = exp_metrics["type"]
-                    raw_scores = exp_metrics[metric_key]
-                    
-                    # Calculate KDE
-                    if len(raw_scores) > 1:
-                        kde = stats.gaussian_kde(raw_scores)
-                        x = np.linspace(min(raw_scores), max(raw_scores), 1000)
-                        y = kde(x)
-                        
-                        # Add KDE trace
+                for exp_name in exps_with_data_for_kde:
+                    exp_metrics_data = self.experiment_metrics[exp_name]
+                    raw_scores_list = exp_metrics_data[metric_key]
+                    if len(raw_scores_list) > 1:
+                        kde = stats.gaussian_kde(raw_scores_list)
+                        x_vals = np.linspace(min(raw_scores_list), max(raw_scores_list), 1000)
+                        y_vals = kde(x_vals)
+                        legend_label = self.experiment_metrics[exp_name].get("name", exp_name)
                         fig.add_trace(go.Scatter(
-                            x=x,
-                            y=y,
+                            x=x_vals,
+                            y=y_vals,
                             mode="lines",
-                            name=exp_type,
+                            name=legend_label,
                             line=dict(width=2)
                         ))
-                
-                # Update layout
                 fig.update_layout(
                     title=f"{metric_name.title()} Density Distribution Comparison",
                     xaxis_title=f"{metric_name.title()} Score",
                     yaxis_title="Density",
-                    legend_title="Experiment Type",
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-                    margin=dict(t=60, r=40, b=80, l=40)
+                    legend_title="Prompt Strategy",
+                    legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle"),
+                    margin=dict(t=60, r=40, b=100, l=40)
                 )
-                
-                # Save the plot
                 plot_name = f"{metric_name}_kde_comparison.html"
                 plot_path = os.path.join(self.output_dir, "plots", plot_name)
                 fig.write_html(plot_path)
                 plot_paths[f"{metric_name}_kde"] = plot_path
+        
+        # NEW: Create KDE plots for RAW CONTEXT similarity distributions
+        raw_context_metrics_config = {
+            "context_cosine": "raw_context_cosine",
+            "context_self_bleu": "raw_context_self_bleu",
+            "context_bertscore": "raw_context_bertscore"
+        }
+
+        for metric_name_display, metric_key_data in raw_context_metrics_config.items():
+            exps_with_data_for_context_kde = []
+            for exp_name, data in self.experiment_metrics.items():
+                if metric_key_data in data and isinstance(data[metric_key_data], list) and len(data[metric_key_data]) > 1:
+                    exps_with_data_for_context_kde.append(exp_name)
+                elif metric_key_data not in data:
+                    print(f"[DEBUG] Context KDE: Metric key '{metric_key_data}' not found for experiment '{exp_name}'. Skipping KDE.")
+                elif not isinstance(data.get(metric_key_data), list):
+                    print(f"[DEBUG] Context KDE: Data for '{metric_key_data}' in experiment '{exp_name}' is not a list ({type(data.get(metric_key_data))}). Skipping KDE.")
+                elif len(data.get(metric_key_data, [])) <= 1:
+                    print(f"[DEBUG] Context KDE: Not enough data points ({len(data.get(metric_key_data, []))}) for '{metric_key_data}' in '{exp_name}'. Skipping KDE.")
+
+            if exps_with_data_for_context_kde:
+                fig = go.Figure()
+                for exp_name in exps_with_data_for_context_kde:
+                    exp_metrics_data = self.experiment_metrics[exp_name]
+                    raw_scores_list = exp_metrics_data[metric_key_data]
+                    if len(raw_scores_list) > 1:
+                        kde = stats.gaussian_kde(raw_scores_list)
+                        x_vals = np.linspace(min(raw_scores_list), max(raw_scores_list), 1000)
+                        y_vals = kde(x_vals)
+                        legend_label = self.experiment_metrics[exp_name].get("name", exp_name)
+                        fig.add_trace(go.Scatter(
+                            x=x_vals,
+                            y=y_vals,
+                            mode="lines",
+                            name=legend_label,
+                            line=dict(width=2)
+                        ))
+                fig.update_layout(
+                    title=f"{metric_name_display.replace('_', ' ').title()} Density (Output vs. Input Context)",
+                    xaxis_title=f"{metric_name_display.replace('_', ' ').title()} Score",
+                    yaxis_title="Density",
+                    legend_title="Prompt Strategy",
+                    legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle"),
+                    margin=dict(t=60, r=40, b=100, l=40)
+                )
+                plot_name = f"{metric_name_display}_context_kde_comparison.html"
+                plot_path = os.path.join(self.output_dir, "plots", plot_name)
+                fig.write_html(plot_path)
+                plot_paths[f"{metric_name_display}_context_kde"] = plot_path
         
         return plot_paths
     
@@ -744,104 +798,14 @@ class CrossExperimentAnalyzer:
                 
                 <!-- Performance Metrics Section (Removed) -->
                 
-                <!-- Context Similarity Metrics Section -->
-                <h2>Context Similarity Metrics</h2>
-                <p class="section-description">This section displays metrics comparing generated ideas to the original input context. Higher scores generally indicate closer alignment or relevance to the source material.</p>
         """
-        
-        context_metrics = list(self.analysis_results.get("context_metrics", {}).keys())
-        if context_metrics:
-            for metric in context_metrics:
-                html_content += f"<h3>{metric.replace('_', ' ').title()}</h3>\n"
-                plot_key = f"context_metrics_{metric}"
-                if plot_key in plot_paths:
-                    plot_file = os.path.basename(plot_paths[plot_key])
-                    html_content += f'''
-                        <div class="plot-container">
-                            <div class="iframe-container">
-                                <iframe src="plots/{plot_file}"></iframe>
-                            </div>
-                        </div>
-                    '''
-                else:
-                    html_content += "<p>Plot not available for this metric.</p>"
-        else:
-            html_content += "<p>No context similarity metrics available for comparison.</p>"
-        
-        # Pairwise Similarity Metrics Section
-        html_content += """
-                <h2>Pairwise Similarity Metrics</h2>
-                <p class="section-description">This section shows metrics comparing generated ideas to each other. These can indicate the diversity or novelty within the set of generated ideas (lower scores often mean more diversity).</p>
-        """
-        pairwise_metrics = list(self.analysis_results.get("pairwise_metrics", {}).keys())
-        if pairwise_metrics:
-            for metric in pairwise_metrics:
-                html_content += f"<h3>{metric.replace('_', ' ').title()}</h3>\n"
-                plot_key = f"pairwise_metrics_{metric}"
-                if plot_key in plot_paths:
-                    plot_file = os.path.basename(plot_paths[plot_key])
-                    html_content += f'''
-                        <div class="plot-container">
-                            <div class="iframe-container">
-                                <iframe src="plots/{plot_file}"></iframe>
-                            </div>
-                        </div>
-                    '''
-                else:
-                    html_content += "<p>Plot not available for this metric.</p>"
-        else:
-            html_content += "<p>No pairwise similarity metrics available for comparison.</p>"
-
-        # Distribution Comparison Section
-        html_content += """
-                <h2>Distribution Comparison</h2>
-                <p class="section-description">
-                    These plots visualize the distribution of <strong>pairwise similarity scores</strong> (Cosine, Self-BLEU, BERTScore) calculated between all unique pairs of ideas generated <em>within each experiment type</em>. 
-                    This helps assess the internal diversity of ideas produced by each prompting strategy. Each experiment type is aggregated across all its runs.
-                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score, and the Y-axis shows the density (concentration) of scores. Peaks indicate common similarity values for that strategy.
-                    <br><strong>Box Plots:</strong> The X-axis shows the different Experiment Types. Each box plot summarizes the distribution of pairwise similarity scores for all ideas generated by that strategy. It shows the median (central line), interquartile range (the box), whiskers (typically 1.5x IQR), and any outliers (individual points). This allows for comparing the central tendency and spread of pairwise scores between strategies.
-                </p>
-        """
-        distribution_metrics = ["cosine", "self_bleu", "bertscore"]
-        for metric in distribution_metrics:
-            # This ensures each metric's plots (KDE and Box) are displayed under its own H3, not in a tab.
-            html_content += f"<h3>{metric.title()} Score Distributions</h3>\n"
-            kde_key = f"{metric}_kde"
-            boxplot_key = f"raw_{metric}_boxplot"
-            
-            plot_grid_items = ""
-            if kde_key in plot_paths:
-                kde_file = os.path.basename(plot_paths[kde_key])
-                plot_grid_items += f'''
-                    <div class="plot-container">
-                        <h4>Density Distribution (KDE)</h4>
-                        <div class="iframe-container">
-                            <iframe src="plots/{kde_file}"></iframe>
-                        </div>
-                    </div>
-                '''
-            
-            if boxplot_key in plot_paths:
-                boxplot_file = os.path.basename(plot_paths[boxplot_key])
-                plot_grid_items += f'''
-                    <div class="plot-container">
-                        <h4>Box Plot</h4>
-                        <div class="iframe-container">
-                            <iframe src="plots/{boxplot_file}"></iframe>
-                        </div>
-                    </div>
-                '''
-            
-            if plot_grid_items:
-                 html_content += f'<div class="plot-grid">{plot_grid_items}</div>' # plot-grid will arrange KDE and Box side-by-side if both exist
-            else:
-                html_content += f"<p>Distribution plots not available for {metric.title()}.</p>"
-        
-        # Statistical Tests Section
+        # STATISTICAL TESTS SECTION STARTS HERE (MOVED)
         html_content += """
                 <h2>Statistical Tests</h2>
                 <p class="section-description">This section presents the results of statistical tests (Mann-Whitney U, T-test, Kolmogorov-Smirnov) comparing the distributions of scores for different metrics between pairs of experiment types. It helps determine if observed differences are statistically significant.</p>
-        """
+        """ # First part of Statistical Tests HTML is now a clean, self-contained string.
+        
+        # The 'if' block for detailed statistical tests starts here, correctly indented.
         if "statistical_tests" in self.analysis_results and self.analysis_results["statistical_tests"]:
             html_content += '<div style="max-height: 400px; overflow-y: auto;">' # Start scrollable div
             for metric, tests in self.analysis_results["statistical_tests"].items():
@@ -884,7 +848,89 @@ class CrossExperimentAnalyzer:
             html_content += '</div>' # End scrollable div
         else:
             html_content += "<p>No statistical test results available.</p>"
-        
+        # STATISTICAL TESTS SECTION ENDS HERE (MOVED)
+
+        # NEW: Conclusion Section - REMOVING THIS AS PER DECISION TO USE STATISTICALANALYZER
+
+        # Context Similarity Metrics Section - REMOVING THIS ENTIRE BLOCK
+        # (This comment is from a previous step, the block itself is already removed)
+
+        # Distribution Comparison Section - RENAMING AND KEEPING for Pairwise (Output vs Output)
+        html_content += """
+                <h2>Pairwise Similarity Distributions (Output vs. Output)</h2>
+                <p class="section-description">
+                    These plots visualize the distribution of <strong>pairwise similarity scores</strong> (Cosine, Self-BLEU, BERTScore) calculated between all unique pairs of ideas generated <em>within each experiment type</em> (i.e., how similar generated ideas are to each other).
+                    This helps assess the internal diversity of ideas produced by each prompting strategy. Each experiment type is aggregated across all its runs.
+                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score, and the Y-axis shows the density (concentration) of scores. Peaks indicate common similarity values for that strategy.
+                    <br><strong>Box Plots:</strong> The X-axis shows the different Experiment Types. Each box plot summarizes the distribution of pairwise similarity scores for all ideas generated by that strategy. It shows the median (central line), interquartile range (the box), whiskers (typically 1.5x IQR), and any outliers (individual points). This allows for comparing the central tendency and spread of pairwise scores between strategies.
+                </p>
+        """ # End of Pairwise Distribution Comparison intro
+
+        distribution_metrics = ["cosine", "self_bleu", "bertscore"] # These are keys for pairwise metrics in plot_paths
+        for metric in distribution_metrics:
+            html_content += f"<h3>{metric.title()} Pairwise Score Distributions</h3>\n"
+            kde_key = f"{metric}_kde" # Key for pairwise KDE plot
+            boxplot_key = f"raw_{metric}_boxplot" # Key for pairwise box plot
+            
+            plot_grid_items = ""
+            if kde_key in plot_paths:
+                kde_file = os.path.basename(plot_paths[kde_key])
+                plot_grid_items += f'''
+                    <div class="plot-container">
+                        <h4>Density Distribution (KDE) - Output vs. Output</h4>
+                        <div class="iframe-container">
+                            <iframe src="plots/{kde_file}"></iframe>
+                        </div>
+                    </div>
+                '''
+            
+            if boxplot_key in plot_paths:
+                boxplot_file = os.path.basename(plot_paths[boxplot_key])
+                plot_grid_items += f'''
+                    <div class="plot-container">
+                        <h4>Box Plot - Output vs. Output</h4>
+                        <div class="iframe-container">
+                            <iframe src="plots/{boxplot_file}"></iframe>
+                        </div>
+                    </div>
+                '''
+            
+            if plot_grid_items:
+                 html_content += f'<div class="plot-grid">{plot_grid_items}</div>'
+            else:
+                html_content += f"<p>Pairwise distribution plots not available for {metric.title()}.</p>"
+        # END OF Pairwise Distribution Comparison Section
+
+        # NEW: Context Similarity Distributions (Output vs. Input) Section
+        html_content += """
+                <h2>Context Similarity Distributions (Output vs. Input)</h2>
+                <p class="section-description">
+                    These plots visualize the distribution of similarity scores comparing each <strong>generated idea to the original input context</strong> (e.g., paper abstract/methods).
+                    This helps assess how relevant or aligned the generated ideas are to the source material for each prompting strategy.
+                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score (idea vs. context), and the Y-axis shows the density.
+                </p>
+        """
+        context_kde_metrics = ["context_cosine", "context_self_bleu", "context_bertscore"] # Keys for context KDE plots
+        for metric_display_key in context_kde_metrics:
+            # Format for display, e.g., "Context Cosine" -> "Cosine"
+            clean_metric_name = metric_display_key.replace("context_", "").replace("_", " ").title()
+            html_content += f"<h3>{clean_metric_name} Density (Output vs. Input)</h3>\n"
+            
+            plot_key = f"{metric_display_key}_context_kde" # Key used when saving the plot
+            if plot_key in plot_paths:
+                plot_file = os.path.basename(plot_paths[plot_key])
+                html_content += f'''
+                    <div class="plot-container">
+                        <div class="iframe-container">
+                            <iframe src="plots/{plot_file}"></iframe>
+                        </div>
+                    </div>
+                '''
+            else:
+                html_content += f"<p>Context KDE plot not available for {clean_metric_name}.</p>"
+        # END OF Context Similarity Distributions Section
+
+        # Ensure the final part of HTML is also correctly appended.
         html_content += """
             </div>
         </body>

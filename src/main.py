@@ -116,7 +116,7 @@ def main():
     
     # Run experiments
     print("\n=== Starting Prompt Engineering Experiments ===")
-    experiment_results = run_experiments(paper_content, num_ideas=30)
+    experiment_results = run_experiments(paper_content, num_ideas=10)
     
     print("\n=== Experiments Completed Successfully ===")
     

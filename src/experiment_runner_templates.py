@@ -248,6 +248,12 @@ def run_idea_generation_batch(
     context_self_bleu_scores = []
     context_bertscore_scores = []
 
+    # Add DEBUG logging for context and ideas before calculation
+    print(f"[DEBUG] run_idea_generation_batch: Attempting context similarity. Context provided: {bool(context)}. Number of ideas: {len(results.get('ideas', []))}.")
+    if context:
+        preview = context[:100].replace('\n', ' ')
+        print(f"[DEBUG] run_idea_generation_batch: Context preview for similarity calc: '{preview}...'")
+
     if context and results["ideas"]:
         for idx, idea_text in enumerate(results["ideas"]):
             if idx % 5 == 0 or idx == len(results["ideas"]) - 1:
@@ -255,6 +261,13 @@ def run_idea_generation_batch(
             context_cosine_scores.append(get_cosine_similarity(idea_text, [context]))
             context_self_bleu_scores.append(get_self_bleu(idea_text, [context]))
             context_bertscore_scores.append(get_bertscore(idea_text, [context]))
+        # Add DEBUG logging after calculations
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_cosine_scores. Count: {len(context_cosine_scores)}. First 3: {context_cosine_scores[:3]}")
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_self_bleu_scores. Count: {len(context_self_bleu_scores)}. First 3: {context_self_bleu_scores[:3]}")
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_bertscore_scores. Count: {len(context_bertscore_scores)}. First 3: {context_bertscore_scores[:3]}")
+    else:
+        # Ensure this print statement is properly newlined after the progress indicator from the loop might have used \r
+        print(f"\n[INFO] run_idea_generation_batch: Skipping context similarity calculation. Context present: {bool(context)}, Ideas present: {bool(results.get('ideas', []))}")
     
     # Calculate overall averages
     avg_pairwise_cosine = np.mean(results["cosine_similarities"]) if results["cosine_similarities"] else 0.0
@@ -335,6 +348,10 @@ def run_idea_generation_batch(
         "runtime_seconds": total_time,
         "seconds_per_idea": time_per_idea
     }
+    # Add DEBUG logging before calling tracker.log_result
+    print(f"[DEBUG] run_idea_generation_batch: About to log results. Checking context_cosine_scores_raw. Count: {len(log_data.get('context_cosine_scores_raw', []))}")
+    print(f"[DEBUG] run_idea_generation_batch: Checking context_self_bleu_scores_raw. Count: {len(log_data.get('context_self_bleu_scores_raw', []))}")
+    print(f"[DEBUG] run_idea_generation_batch: Checking context_bertscore_scores_raw. Count: {len(log_data.get('context_bertscore_scores_raw', []))}")
     tracker.log_result(run_id, log_data)
     
     return results
