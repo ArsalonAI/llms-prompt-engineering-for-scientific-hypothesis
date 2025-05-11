@@ -222,40 +222,110 @@ class CrossExperimentAnalyzer:
             if exp_data["csv_data"] is not None:
                 csv_data = exp_data["csv_data"]
                 
+                # Enhanced debug for CSV columns
+                print(f"[DEBUG] Available CSV columns for {exp_name}: {csv_data.columns.tolist()}")
+                
                 # Map CSV column name to internal raw metric key name for pairwise scores
-                # The CSV stores lists of pairwise scores under these 'avg_...' names.
-                # These are actually the raw lists if `log_result` in ExperimentTracker uses these keys for raw lists.
-                # Let's ensure consistency: `run_idea_generation_batch` logs e.g. "cosine_similarities" (raw list)
-                # and "avg_pairwise_cosine_similarity" (float). `ExperimentTracker` should save both if dtypes are defined.
-                # The dtypes now reflect this separation. `extract_metrics` should read the raw list columns.
                 csv_to_raw_pairwise_metric_map = {
                     "cosine_similarities": "raw_pairwise_cosine", # Key in CSV : Key in exp_metrics
                     "self_bleu_scores": "raw_pairwise_self_bleu",
                     "bertscore_scores": "raw_pairwise_bertscore"
                 }
-
+                
+                # NEW: Extract raw CONTEXT similarity scores from CSV data
+                csv_to_raw_context_metric_map = {
+                    "context_cosine_scores_raw": "raw_context_cosine", 
+                    "context_self_bleu_scores_raw": "raw_context_self_bleu", # Added for context self-bleu
+                    "context_bertscore_scores_raw": "raw_context_bertscore"
+                }
+                
+                # Process all pairwise metrics columns
                 for csv_col_name, raw_metric_key in csv_to_raw_pairwise_metric_map.items():
                     if csv_col_name in csv_data.columns:
                         try:
+                            # Check if there's any data
+                            if csv_data[csv_col_name].empty:
+                                print(f"[DEBUG] Empty column for '{csv_col_name}' in {exp_name}. Storing as empty list.")
+                                exp_metrics[raw_metric_key] = []
+                                continue
+                                
+                            # Try different parsing methods
+                            raw_scores = None
                             raw_scores_str = csv_data[csv_col_name].iloc[0]
-                            if pd.isna(raw_scores_str):
-                                print(f"[DEBUG] Raw pairwise scores for '{csv_col_name}' in {exp_name} are NaN. Storing as empty list.")
-                                raw_scores = []
-                            elif isinstance(raw_scores_str, str):
-                                raw_scores = eval(raw_scores_str)
-                            elif isinstance(raw_scores_str, list): # Already a list (less likely from CSV but handle)
-                                raw_scores = raw_scores_str
-                            else:
-                                print(f"[WARNING] Unexpected type for raw pairwise scores '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}. Storing as empty list.")
-                                raw_scores = []
+                            print(f"[DEBUG] Raw data type for '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}")
+                            
+                            # 1. Try direct eval if it's a string representation of a list
+                            if isinstance(raw_scores_str, str):
+                                try:
+                                    # Fix: Make str representation safer for eval
+                                    if raw_scores_str.strip().startswith('[') and raw_scores_str.strip().endswith(']'):
+                                        raw_scores = eval(raw_scores_str)
+                                    else:
+                                        # Handle case where string might be formatted differently
+                                        import re
+                                        # Extract numbers from string
+                                        numbers = re.findall(r"[-+]?\d*\.\d+|\d+", raw_scores_str)
+                                        raw_scores = [float(n) for n in numbers]
+                                except (SyntaxError, ValueError) as e:
+                                    print(f"[DEBUG] Failed to parse with eval due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 2. Try json.loads if it's a JSON string
+                                    if raw_scores is None:
+                                        try:
+                                            import json
+                                            # Ensure the string is properly JSON formatted
+                                            clean_str = raw_scores_str.replace("'", '"')
+                                            raw_scores = json.loads(clean_str)
+                                        except (json.JSONDecodeError, ValueError) as e:
+                                            print(f"[DEBUG] Failed to parse with json due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 3. Try literal_eval as a safer alternative to eval
+                                    if raw_scores is None:
+                                        try:
+                                            from ast import literal_eval
+                                            raw_scores = literal_eval(raw_scores_str)
+                                        except (SyntaxError, ValueError) as e:
+                                            print(f"[DEBUG] Failed to parse with literal_eval due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 4. Try extracting list directly from string representation
+                                    if raw_scores is None and '[' in raw_scores_str and ']' in raw_scores_str:
+                                        try:
+                                            import re
+                                            # Extract the list content between the first '[' and the last ']'
+                                            list_content = raw_scores_str[raw_scores_str.find('[')+1:raw_scores_str.rfind(']')]
+                                            # Split by comma and convert to float
+                                            raw_scores = [float(x.strip()) for x in list_content.split(',') if x.strip()]
+                                        except (ValueError, TypeError) as e:
+                                            print(f"[DEBUG] Failed to extract list directly due to {e}: {raw_scores_str[:50]}...")
                             
                             if isinstance(raw_scores, list):
-                                exp_metrics[raw_metric_key] = raw_scores
-                                if not raw_scores:
-                                    print(f"[DEBUG] Parsed raw pairwise scores for '{csv_col_name}' in {exp_name} is an empty list.")
+                                # Validate that all items are numeric
+                                validated_scores = []
+                                for score in raw_scores:
+                                    try:
+                                        validated_scores.append(float(score))
+                                    except (ValueError, TypeError):
+                                        print(f"[WARNING] Skipping non-numeric value in '{csv_col_name}' for {exp_name}: {score}")
+                                
+                                if validated_scores:
+                                    print(f"[DEBUG] Successfully parsed {len(validated_scores)} scores for '{csv_col_name}' in {exp_name}")
+                                    exp_metrics[raw_metric_key] = validated_scores
+                                else:
+                                    print(f"[DEBUG] No valid scores found for '{csv_col_name}' in {exp_name}. Storing empty list.")
+                                    exp_metrics[raw_metric_key] = []
                             else:
-                                print(f"[WARNING] Failed to parse raw pairwise scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
-                                exp_metrics[raw_metric_key] = []
+                                if raw_scores is None:
+                                    print(f"[WARNING] Failed to parse raw pairwise scores for '{csv_col_name}' in {exp_name} into a valid format. Storing as empty list.")
+                                    exp_metrics[raw_metric_key] = []
+                                else:
+                                    # Try to handle case where we got a single scalar value
+                                    try:
+                                        single_value = float(raw_scores)
+                                        print(f"[DEBUG] Got single numeric value for '{csv_col_name}' in {exp_name}. Converting to list.")
+                                        exp_metrics[raw_metric_key] = [single_value]
+                                    except (ValueError, TypeError):
+                                        print(f"[WARNING] Failed to parse raw pairwise scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
+                                        exp_metrics[raw_metric_key] = []
                         except Exception as e:
                             print(f"[WARNING] Error parsing raw pairwise scores for '{csv_col_name}' in {exp_name}: {e}. Storing as empty list.")
                             exp_metrics[raw_metric_key] = []
@@ -263,41 +333,100 @@ class CrossExperimentAnalyzer:
                         print(f"[DEBUG] Pairwise raw score column '{csv_col_name}' not found in CSV for {exp_name}. Storing empty list for {raw_metric_key}.")
                         exp_metrics[raw_metric_key] = []
                 
-                # NEW: Extract raw CONTEXT similarity scores from CSV data
-                csv_to_raw_context_metric_map = {
-                    "context_cosine_scores_raw": "raw_context_cosine",
-                    "context_self_bleu_scores_raw": "raw_context_self_bleu",
-                    "context_bertscore_scores_raw": "raw_context_bertscore"
-                }
+                # Process all context metrics columns using the same extraction logic
                 for csv_col_name, raw_metric_key in csv_to_raw_context_metric_map.items():
                     if csv_col_name in csv_data.columns:
                         try:
+                            # Check if there's any data
+                            if csv_data[csv_col_name].empty:
+                                print(f"[DEBUG] Empty column for context metric '{csv_col_name}' in {exp_name}. Storing as empty list.")
+                                exp_metrics[raw_metric_key] = []
+                                continue
+                                
+                            # Try different parsing methods
+                            raw_scores = None
                             raw_scores_str = csv_data[csv_col_name].iloc[0]
-                            if pd.isna(raw_scores_str):
-                                print(f"[DEBUG] Raw context scores for '{csv_col_name}' in {exp_name} are NaN. Storing as empty list.")
-                                raw_scores = []
-                            elif isinstance(raw_scores_str, str):
-                                raw_scores = eval(raw_scores_str)
-                            elif isinstance(raw_scores_str, list):
-                                raw_scores = raw_scores_str
-                            else:
-                                print(f"[WARNING] Unexpected type for raw context scores '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}. Storing as empty list.")
-                                raw_scores = []
+                            print(f"[DEBUG] Raw data type for context metric '{csv_col_name}' in {exp_name}: {type(raw_scores_str)}")
+                            
+                            # 1. Try direct eval if it's a string representation of a list
+                            if isinstance(raw_scores_str, str):
+                                try:
+                                    # Fix: Make str representation safer for eval
+                                    if raw_scores_str.strip().startswith('[') and raw_scores_str.strip().endswith(']'):
+                                        raw_scores = eval(raw_scores_str)
+                                    else:
+                                        # Handle case where string might be formatted differently
+                                        import re
+                                        # Extract numbers from string
+                                        numbers = re.findall(r"[-+]?\d*\.\d+|\d+", raw_scores_str)
+                                        raw_scores = [float(n) for n in numbers]
+                                except (SyntaxError, ValueError) as e:
+                                    print(f"[DEBUG] Failed to parse with eval due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 2. Try json.loads if it's a JSON string
+                                    if raw_scores is None:
+                                        try:
+                                            import json
+                                            # Ensure the string is properly JSON formatted
+                                            clean_str = raw_scores_str.replace("'", '"')
+                                            raw_scores = json.loads(clean_str)
+                                        except (json.JSONDecodeError, ValueError) as e:
+                                            print(f"[DEBUG] Failed to parse with json due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 3. Try literal_eval as a safer alternative to eval
+                                    if raw_scores is None:
+                                        try:
+                                            from ast import literal_eval
+                                            raw_scores = literal_eval(raw_scores_str)
+                                        except (SyntaxError, ValueError) as e:
+                                            print(f"[DEBUG] Failed to parse with literal_eval due to {e}: {raw_scores_str[:50]}...")
+                                    
+                                    # 4. Try extracting list directly from string representation
+                                    if raw_scores is None and '[' in raw_scores_str and ']' in raw_scores_str:
+                                        try:
+                                            import re
+                                            # Extract the list content between the first '[' and the last ']'
+                                            list_content = raw_scores_str[raw_scores_str.find('[')+1:raw_scores_str.rfind(']')]
+                                            # Split by comma and convert to float
+                                            raw_scores = [float(x.strip()) for x in list_content.split(',') if x.strip()]
+                                        except (ValueError, TypeError) as e:
+                                            print(f"[DEBUG] Failed to extract list directly due to {e}: {raw_scores_str[:50]}...")
                             
                             if isinstance(raw_scores, list):
-                                exp_metrics[raw_metric_key] = raw_scores
-                                if not raw_scores:
-                                    print(f"[DEBUG] Parsed raw context scores for '{csv_col_name}' in {exp_name} is an empty list.")
+                                # Validate that all items are numeric
+                                validated_scores = []
+                                for score in raw_scores:
+                                    try:
+                                        validated_scores.append(float(score))
+                                    except (ValueError, TypeError):
+                                        print(f"[WARNING] Skipping non-numeric value in context metric '{csv_col_name}' for {exp_name}: {score}")
+                                
+                                if validated_scores:
+                                    print(f"[DEBUG] Successfully parsed {len(validated_scores)} context scores for '{csv_col_name}' in {exp_name}")
+                                    exp_metrics[raw_metric_key] = validated_scores
+                                else:
+                                    print(f"[DEBUG] No valid context scores found for '{csv_col_name}' in {exp_name}. Storing empty list.")
+                                    exp_metrics[raw_metric_key] = []
                             else:
-                                print(f"[WARNING] Failed to parse raw context scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
-                                exp_metrics[raw_metric_key] = []
+                                if raw_scores is None:
+                                    print(f"[WARNING] Failed to parse raw context scores for '{csv_col_name}' in {exp_name} into a valid format. Storing as empty list.")
+                                    exp_metrics[raw_metric_key] = []
+                                else:
+                                    # Try to handle case where we got a single scalar value
+                                    try:
+                                        single_value = float(raw_scores)
+                                        print(f"[DEBUG] Got single numeric value for '{csv_col_name}' in {exp_name}. Converting to list.")
+                                        exp_metrics[raw_metric_key] = [single_value]
+                                    except (ValueError, TypeError):
+                                        print(f"[WARNING] Failed to parse raw context scores for '{csv_col_name}' in {exp_name} into a list. Storing as empty list.")
+                                        exp_metrics[raw_metric_key] = []
                         except Exception as e:
-                            print(f"[WARNING] Error parsing raw context scores '{csv_col_name}' in {exp_name}: {e}. Storing as empty list.")
+                            print(f"[WARNING] Error parsing raw context scores for '{csv_col_name}' in {exp_name}: {e}. Storing as empty list.")
                             exp_metrics[raw_metric_key] = []
                     else:
-                        print(f"[DEBUG] Context raw score column '{csv_col_name}' not found in CSV for {exp_name}. Storing empty list for {raw_metric_key}.")
+                        print(f"[DEBUG] Context metric column '{csv_col_name}' not found in CSV for {exp_name}. Storing empty list for {raw_metric_key}.")
                         exp_metrics[raw_metric_key] = []
-
+                
                 # Get KDE data if available
                 if "kde_values" in csv_data.columns:
                     try:
@@ -305,6 +434,106 @@ class CrossExperimentAnalyzer:
                         exp_metrics["kde_values"] = kde_values
                     except (SyntaxError, ValueError, IndexError) as e:
                         print(f"[WARNING] Could not parse KDE values from CSV: {e}")
+                
+                # Check if we've obtained valid raw scores; if not, try to extract from results.json
+                pairwise_metrics_to_check = ["raw_pairwise_cosine", "raw_pairwise_self_bleu", "raw_pairwise_bertscore"]
+                context_metrics_to_check = ["raw_context_cosine", "raw_context_self_bleu", "raw_context_bertscore"]
+                
+                # Flag to check if any pairwise metrics were missing
+                missing_pairwise_metrics = any(
+                    exp_metrics.get(metric_key, []) == [] for metric_key in pairwise_metrics_to_check
+                )
+                
+                # Flag to check if any context metrics were missing
+                missing_context_metrics = any(
+                    exp_metrics.get(metric_key, []) == [] for metric_key in context_metrics_to_check
+                )
+                
+                # If we're missing any metrics, try to extract from results.json
+                if missing_pairwise_metrics or missing_context_metrics:
+                    print(f"[INFO] Some raw scores missing from CSV for {exp_name}. Trying to extract from results.json...")
+                    results = exp_data["results"]
+                    
+                    # Extract individual experiment results
+                    if "results" in results and isinstance(results["results"], list):
+                        for result in results["results"]:
+                            # Extract pairwise metrics if missing
+                            if missing_pairwise_metrics:
+                                for csv_key, raw_key in csv_to_raw_pairwise_metric_map.items():
+                                    if raw_key in pairwise_metrics_to_check and exp_metrics.get(raw_key, []) == [] and csv_key in result:
+                                        scores = result[csv_key]
+                                        if isinstance(scores, list) and scores:
+                                            print(f"[INFO] Found {len(scores)} {csv_key} scores in results.json for {exp_name}")
+                                            # Ensure all values are float
+                                            try:
+                                                validated_scores = [float(score) for score in scores if pd.notna(score)]
+                                                exp_metrics[raw_key] = validated_scores
+                                            except (ValueError, TypeError) as e:
+                                                print(f"[WARNING] Error converting scores to float in results.json: {e}")
+                            
+                            # Extract context metrics if missing
+                            if missing_context_metrics:
+                                for csv_key, raw_key in csv_to_raw_context_metric_map.items():
+                                    if raw_key in context_metrics_to_check and exp_metrics.get(raw_key, []) == [] and csv_key in result:
+                                        scores = result[csv_key]
+                                        if isinstance(scores, list) and scores:
+                                            print(f"[INFO] Found {len(scores)} {csv_key} scores in results.json for {exp_name}")
+                                            # Ensure all values are float
+                                            try:
+                                                validated_scores = [float(score) for score in scores if pd.notna(score)]
+                                                exp_metrics[raw_key] = validated_scores
+                                            except (ValueError, TypeError) as e:
+                                                print(f"[WARNING] Error converting scores to float in results.json: {e}")
+                            
+                            # Extract KDE values if missing
+                            if "kde_values" not in exp_metrics and "kde_values" in result:
+                                exp_metrics["kde_values"] = result["kde_values"]
+                                print(f"[INFO] Found KDE values in results.json for {exp_name}")
+                    
+                    # Try a different approach - look directly at the original log_data if results extraction failed
+                    if (missing_pairwise_metrics or missing_context_metrics) and "summary" in results:
+                        print(f"[INFO] Attempting to extract from summary in results.json for {exp_name}...")
+                        try:
+                            # Look for raw scores in Context Similarities and Pairwise Similarities
+                            if missing_context_metrics and "Context Similarities" in results["summary"]:
+                                context_sims = results["summary"]["Context Similarities"]
+                                # Raw data might be stored under _raw suffix
+                                for metric in ["cosine_raw", "bertscore_raw"]:
+                                    if metric in context_sims:
+                                        raw_key = f"raw_context_{metric.replace('_raw', '')}"
+                                        if raw_key in context_metrics_to_check and exp_metrics.get(raw_key, []) == []:
+                                            if isinstance(context_sims[metric], list) and context_sims[metric]:
+                                                print(f"[INFO] Found {len(context_sims[metric])} scores for {raw_key} in summary.")
+                                                exp_metrics[raw_key] = context_sims[metric]
+                            
+                            if missing_pairwise_metrics and "Pairwise Similarities" in results["summary"]:
+                                pairwise_sims = results["summary"]["Pairwise Similarities"]
+                                # Raw data might be stored under _raw suffix
+                                for metric in ["cosine_raw", "self_bleu_raw", "bertscore_raw"]:
+                                    if metric in pairwise_sims:
+                                        raw_key = f"raw_pairwise_{metric.replace('_raw', '')}"
+                                        if raw_key in pairwise_metrics_to_check and exp_metrics.get(raw_key, []) == []:
+                                            if isinstance(pairwise_sims[metric], list) and pairwise_sims[metric]:
+                                                print(f"[INFO] Found {len(pairwise_sims[metric])} scores for {raw_key} in summary.")
+                                                exp_metrics[raw_key] = pairwise_sims[metric]
+                        except Exception as e:
+                            print(f"[WARNING] Error extracting from summary: {e}")
+
+                # Last chance fallback - if still missing data, log warning but continue with empty arrays
+                still_missing_pairwise = any(
+                    exp_metrics.get(metric_key, []) == [] for metric_key in pairwise_metrics_to_check
+                )
+                still_missing_context = any(
+                    exp_metrics.get(metric_key, []) == [] for metric_key in context_metrics_to_check
+                )
+                
+                if still_missing_pairwise:
+                    missing_metrics = [key for key in pairwise_metrics_to_check if exp_metrics.get(key, []) == []]
+                    print(f"[WARNING] Still missing pairwise metrics after all extraction attempts: {missing_metrics}")
+                
+                if still_missing_context:
+                    missing_metrics = [key for key in context_metrics_to_check if exp_metrics.get(key, []) == []]
+                    print(f"[WARNING] Still missing context metrics after all extraction attempts: {missing_metrics}")
             
             metrics[exp_name] = exp_metrics
         
@@ -397,62 +626,58 @@ class CrossExperimentAnalyzer:
             comparison_results["runtime_comparison"]["ideas_per_minute"][exp_type] = type_df["ideas_per_minute"].mean()
         
         # Perform statistical tests for raw similarity scores
-        raw_metrics = {
-            "cosine": "raw_pairwise_cosine",
-            "self_bleu": "raw_pairwise_self_bleu",
-            "bertscore": "raw_pairwise_bertscore"
+        # Define a mapping for PAIRWISE raw metrics
+        pairwise_raw_metrics_map = {
+            "pairwise_cosine": "raw_pairwise_cosine",
+            "pairwise_self_bleu": "raw_pairwise_self_bleu",
+            "pairwise_bertscore": "raw_pairwise_bertscore"
         }
+
+        # Define a mapping for CONTEXT raw metrics
+        context_raw_metrics_map = {
+            "context_cosine": "raw_context_cosine",
+            "context_self_bleu": "raw_context_self_bleu", # Assuming you will add/ensure this key exists in extract_metrics
+            "context_bertscore": "raw_context_bertscore"
+        }
+
+        # Combine both maps for iteration
+        all_raw_metrics_to_test = {**pairwise_raw_metrics_map, **context_raw_metrics_map}
         
-        for metric_name, metric_key in raw_metrics.items():
+        for display_metric_name, data_metric_key in all_raw_metrics_to_test.items():
             # Check which experiments have raw scores for this metric
             exps_with_data = [exp for exp, data in self.experiment_metrics.items() 
-                             if metric_key in data and isinstance(data[metric_key], list)]
+                             if data_metric_key in data and isinstance(data[data_metric_key], list) and data[data_metric_key]]
             
             if len(exps_with_data) >= 2:
-                # Perform pairwise tests
                 test_results = {}
                 
                 for i in range(len(exps_with_data)):
-                    for j in range(i+1, len(exps_with_data)):
+                    for j in range(i + 1, len(exps_with_data)):
                         exp1 = exps_with_data[i]
                         exp2 = exps_with_data[j]
                         
-                        # Get the raw scores
-                        scores1 = self.experiment_metrics[exp1][metric_key]
-                        scores2 = self.experiment_metrics[exp2][metric_key]
+                        scores1 = self.experiment_metrics[exp1][data_metric_key]
+                        scores2 = self.experiment_metrics[exp2][data_metric_key]
                         
-                        # Perform Mann-Whitney U test
                         try:
-                            mw_stat, mw_p = stats.mannwhitneyu(scores1, scores2, alternative='two-sided')
-                            
-                            # Perform t-test
-                            t_stat, t_p = stats.ttest_ind(scores1, scores2, equal_var=False)
-                            
-                            # Calculate effect size (Cohen's d)
+                            ks_stat, ks_p = stats.ks_2samp(scores1, scores2)
                             mean1, std1 = np.mean(scores1), np.std(scores1)
                             mean2, std2 = np.mean(scores2), np.std(scores2)
                             
-                            pooled_std = np.sqrt(((len(scores1) - 1) * std1**2 + 
-                                                 (len(scores2) - 1) * std2**2) / 
-                                                (len(scores1) + len(scores2) - 2))
+                            # Ensure std1 and std2 are not zero and lengths are sufficient for pooled_std
+                            if len(scores1) > 1 and len(scores2) > 1 and std1 > 0 and std2 > 0:
+                                pooled_std = np.sqrt(((len(scores1) - 1) * std1**2 + 
+                                                     (len(scores2) - 1) * std2**2) / 
+                                                    (len(scores1) + len(scores2) - 2))
+                                cohen_d = (mean1 - mean2) / pooled_std if pooled_std != 0 else 0
+                            else: # Fallback if cannot compute pooled_std or if std is zero
+                                cohen_d = 0 
+                                if np.std(np.concatenate([scores1, scores2])) > 0: # Check if combined data has variance
+                                   cohen_d = (mean1 - mean2) / np.std(np.concatenate([scores1, scores2]))
+                                else: # True zero variance case for combined data
+                                   cohen_d = 0
                             
-                            cohen_d = (mean1 - mean2) / pooled_std if pooled_std != 0 else 0
-                            
-                            # Perform 2-sample Kolmogorov-Smirnov test
-                            ks_stat, ks_p = stats.ks_2samp(scores1, scores2)
-                            
-                            # Store results
                             test_results[f"{exp1} vs {exp2}"] = {
-                                "mann_whitney": {
-                                    "statistic": float(mw_stat),
-                                    "p_value": float(mw_p),
-                                    "significant": mw_p < 0.05
-                                },
-                                "t_test": {
-                                    "statistic": float(t_stat),
-                                    "p_value": float(t_p),
-                                    "significant": t_p < 0.05
-                                },
                                 "ks_test": {
                                     "statistic": float(ks_stat),
                                     "p_value": float(ks_p),
@@ -464,9 +689,35 @@ class CrossExperimentAnalyzer:
                                 }
                             }
                         except Exception as e:
-                            print(f"[WARNING] Statistical test failed for {metric_name} ({exp1} vs {exp2}): {e}")
+                            print(f"[WARNING] Statistical test failed for {display_metric_name} ({exp1} vs {exp2}): {e}")
                 
-                comparison_results["statistical_tests"][metric_name] = test_results
+                try:
+                    all_exp_scores = []
+                    group_labels = []
+                    for exp_name in exps_with_data:
+                        if data_metric_key in self.experiment_metrics[exp_name]:
+                            scores = self.experiment_metrics[exp_name][data_metric_key]
+                            if scores: # Ensure scores list is not empty
+                                all_exp_scores.append(scores)
+                                group_labels.append(exp_name)
+
+                    if len(all_exp_scores) >= 2:
+                        # Filter out empty lists from all_exp_scores before passing to kruskal
+                        valid_scores_for_kruskal = [s for s in all_exp_scores if len(s) > 0]
+                        if len(valid_scores_for_kruskal) >=2: # Need at least two groups with data
+                            kw_stat, kw_p = stats.kruskal(*valid_scores_for_kruskal)
+                            test_results["kruskal_wallis"] = {
+                                "statistic": float(kw_stat),
+                                "p_value": float(kw_p),
+                                "significant": kw_p < 0.05,
+                                "groups": group_labels # groups should correspond to all_exp_scores used
+                            }
+                        else:
+                            print(f"[INFO] Kruskal-Wallis skipped for {display_metric_name}: Not enough groups with data after filtering empty lists.")
+                except Exception as e:
+                    print(f"[WARNING] Kruskal-Wallis test failed for {display_metric_name}: {e}")
+                
+                comparison_results["statistical_tests"][display_metric_name] = test_results
         
         self.analysis_results = comparison_results
         return comparison_results
@@ -600,7 +851,6 @@ class CrossExperimentAnalyzer:
         # NEW: Create KDE plots for RAW CONTEXT similarity distributions
         raw_context_metrics_config = {
             "context_cosine": "raw_context_cosine",
-            "context_self_bleu": "raw_context_self_bleu",
             "context_bertscore": "raw_context_bertscore"
         }
 
@@ -814,10 +1064,6 @@ class CrossExperimentAnalyzer:
                 <table class="stat-table">
                     <tr>
                         <th>Comparison</th>
-                        <th>Mann-Whitney p-value</th>
-                        <th>Significant?</th>
-                        <th>t-test p-value</th>
-                        <th>Significant?</th>
                         <th>KS Test p-value</th>
                         <th>Significant?</th>
                         <th>Effect Size (Cohen's d)</th>
@@ -826,18 +1072,16 @@ class CrossExperimentAnalyzer:
                 """
                 
                 for comparison, test_results in tests.items():
-                    mw_test = test_results["mann_whitney"]
-                    t_test = test_results["t_test"]
-                    ks_test = test_results.get("ks_test", {"p_value": np.nan, "significant": False}) 
+                    # Skip the Kruskal-Wallis test entry when iterating through pairwise comparisons
+                    if comparison == "kruskal_wallis":
+                        continue
+                        
+                    ks_test = test_results["ks_test"]
                     effect_size = test_results["effect_size"]
                     
                     html_content += f"""
                     <tr>
                         <td>{comparison}</td>
-                        <td>{mw_test['p_value']:.4f}</td>
-                        <td>{"Yes" if mw_test['significant'] else "No"}</td>
-                        <td>{t_test['p_value']:.4f}</td>
-                        <td>{"Yes" if t_test['significant'] else "No"}</td>
                         <td>{ks_test['p_value']:.4f}</td>
                         <td>{"Yes" if ks_test['significant'] else "No"}</td>
                         <td>{effect_size['cohen_d']:.4f}</td>
@@ -845,6 +1089,28 @@ class CrossExperimentAnalyzer:
                     </tr>
                     """
                 html_content += "</table>\n"
+                
+                # Add Kruskal-Wallis test results if available
+                if "kruskal_wallis" in tests:
+                    kw_test = tests["kruskal_wallis"]
+                    html_content += f"""
+                    <h4>Kruskal-Wallis Test (Overall Comparison)</h4>
+                    <p>Tests whether the distributions of all experiment types are identical or at least one differs.</p>
+                    <table class="stat-table">
+                        <tr>
+                            <th>Test Statistic</th>
+                            <th>p-value</th>
+                            <th>Significant?</th>
+                            <th>Groups Compared</th>
+                        </tr>
+                        <tr>
+                            <td>{kw_test['statistic']:.4f}</td>
+                            <td>{kw_test['p_value']:.4f}</td>
+                            <td>{"Yes" if kw_test['significant'] else "No"}</td>
+                            <td>{", ".join(kw_test['groups'])}</td>
+                        </tr>
+                    </table>
+                    """
             html_content += '</div>' # End scrollable div
         else:
             html_content += "<p>No statistical test results available.</p>"
@@ -857,27 +1123,106 @@ class CrossExperimentAnalyzer:
 
         # Distribution Comparison Section - RENAMING AND KEEPING for Pairwise (Output vs Output)
         html_content += """
-                <h2>Pairwise Similarity Distributions (Output vs. Output)</h2>
+                <h2>Similarity Distributions Comparison</h2>
                 <p class="section-description">
-                    These plots visualize the distribution of <strong>pairwise similarity scores</strong> (Cosine, Self-BLEU, BERTScore) calculated between all unique pairs of ideas generated <em>within each experiment type</em> (i.e., how similar generated ideas are to each other).
-                    This helps assess the internal diversity of ideas produced by each prompting strategy. Each experiment type is aggregated across all its runs.
-                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score, and the Y-axis shows the density (concentration) of scores. Peaks indicate common similarity values for that strategy.
-                    <br><strong>Box Plots:</strong> The X-axis shows the different Experiment Types. Each box plot summarizes the distribution of pairwise similarity scores for all ideas generated by that strategy. It shows the median (central line), interquartile range (the box), whiskers (typically 1.5x IQR), and any outliers (individual points). This allows for comparing the central tendency and spread of pairwise scores between strategies.
+                    These plots visualize the distributions of similarity scores, comparing both pairwise scores between generated ideas and similarity to the input context.
                 </p>
-        """ # End of Pairwise Distribution Comparison intro
+        """
 
-        distribution_metrics = ["cosine", "self_bleu", "bertscore"] # These are keys for pairwise metrics in plot_paths
+        # Group related metric plots together
+        distribution_metrics = ["cosine", "bertscore"] # Remove "self_bleu" from this list
+        
         for metric in distribution_metrics:
-            html_content += f"<h3>{metric.title()} Pairwise Score Distributions</h3>\n"
-            kde_key = f"{metric}_kde" # Key for pairwise KDE plot
+            html_content += f"<h3>{metric.title()} Similarity Distributions</h3>\n"
+            
+            # Add Pairwise (Output vs. Output) plots first
+            kde_pairwise_key = f"{metric}_kde" # Key for pairwise KDE plot
             boxplot_key = f"raw_{metric}_boxplot" # Key for pairwise box plot
             
-            plot_grid_items = ""
+            html_content += """
+                <div class="plot-grid">
+            """
+            
+            # Pairwise (output vs output) plots
+            html_content += """
+                        <div class="plot-container">
+                    <h4>Output vs. Output Distribution (KDE)</h4>
+                    <p>Similarity between different generated ideas (pairwise comparison)</p>
+            """
+            
+            if kde_pairwise_key in plot_paths:
+                kde_file = os.path.basename(plot_paths[kde_pairwise_key])
+                html_content += f'''
+                            <div class="iframe-container">
+                        <iframe src="plots/{kde_file}"></iframe>
+                            </div>
+                '''
+            else:
+                html_content += f"<p>Pairwise KDE plot not available for {metric.title()}.</p>"
+                
+            html_content += """
+                </div>
+            """
+            
+            # Output vs. Input plots for the same metric
+            context_metric_display = f"context_{metric}"
+            kde_context_key = f"{context_metric_display}_context_kde"
+            
+            html_content += """
+                <div class="plot-container">
+                    <h4>Output vs. Input Distribution (KDE)</h4>
+                    <p>Similarity between each generated idea and the original input context</p>
+            """
+            
+            if kde_context_key in plot_paths:
+                context_kde_file = os.path.basename(plot_paths[kde_context_key])
+                html_content += f'''
+                    <div class="iframe-container">
+                        <iframe src="plots/{context_kde_file}"></iframe>
+                        </div>
+                    '''
+            else:
+                html_content += f"<p>Context KDE plot not available for {metric.title()}.</p>"
+        
+            html_content += """
+                </div>
+            """
+            
+            # Add boxplot in a new row if available
+            if boxplot_key in plot_paths:
+                boxplot_file = os.path.basename(plot_paths[boxplot_key])
+                html_content += f'''
+                <div class="plot-container">
+                    <h4>Box Plot Distribution (Output vs. Output)</h4>
+                    <div class="iframe-container">
+                        <iframe src="plots/{boxplot_file}"></iframe>
+                    </div>
+                </div>
+                '''
+            
+            html_content += """
+            </div>
+            """
+            
+            # Add Self-BLEU section separately (only Output vs. Output)
+            html_content += """
+                <h3>Self-BLEU Distribution (Output Diversity Only)</h3>
+                <p>Self-BLEU measures text overlap between pairs of generated ideas. Lower values indicate more diverse outputs.</p>
+            """
+            
+            metric = "self_bleu"
+            kde_key = f"{metric}_kde"
+            boxplot_key = f"raw_{metric}_boxplot"
+            
+            html_content += """
+                <div class="plot-grid">
+            """
+            
             if kde_key in plot_paths:
                 kde_file = os.path.basename(plot_paths[kde_key])
-                plot_grid_items += f'''
+                html_content += f'''
                     <div class="plot-container">
-                        <h4>Density Distribution (KDE) - Output vs. Output</h4>
+                    <h4>Output vs. Output Distribution (KDE)</h4>
                         <div class="iframe-container">
                             <iframe src="plots/{kde_file}"></iframe>
                         </div>
@@ -886,49 +1231,19 @@ class CrossExperimentAnalyzer:
             
             if boxplot_key in plot_paths:
                 boxplot_file = os.path.basename(plot_paths[boxplot_key])
-                plot_grid_items += f'''
+                html_content += f'''
                     <div class="plot-container">
-                        <h4>Box Plot - Output vs. Output</h4>
+                    <h4>Box Plot Distribution</h4>
                         <div class="iframe-container">
                             <iframe src="plots/{boxplot_file}"></iframe>
                         </div>
                     </div>
                 '''
             
-            if plot_grid_items:
-                 html_content += f'<div class="plot-grid">{plot_grid_items}</div>'
-            else:
-                html_content += f"<p>Pairwise distribution plots not available for {metric.title()}.</p>"
-        # END OF Pairwise Distribution Comparison Section
-
-        # NEW: Context Similarity Distributions (Output vs. Input) Section
-        html_content += """
-                <h2>Context Similarity Distributions (Output vs. Input)</h2>
-                <p class="section-description">
-                    These plots visualize the distribution of similarity scores comparing each <strong>generated idea to the original input context</strong> (e.g., paper abstract/methods).
-                    This helps assess how relevant or aligned the generated ideas are to the source material for each prompting strategy.
-                    <br><strong>KDE Plots:</strong> Each colored line represents an experiment type (prompting strategy). The X-axis is the similarity score (idea vs. context), and the Y-axis shows the density.
-                </p>
-        """
-        context_kde_metrics = ["context_cosine", "context_self_bleu", "context_bertscore"] # Keys for context KDE plots
-        for metric_display_key in context_kde_metrics:
-            # Format for display, e.g., "Context Cosine" -> "Cosine"
-            clean_metric_name = metric_display_key.replace("context_", "").replace("_", " ").title()
-            html_content += f"<h3>{clean_metric_name} Density (Output vs. Input)</h3>\n"
-            
-            plot_key = f"{metric_display_key}_context_kde" # Key used when saving the plot
-            if plot_key in plot_paths:
-                plot_file = os.path.basename(plot_paths[plot_key])
-                html_content += f'''
-                    <div class="plot-container">
-                        <div class="iframe-container">
-                            <iframe src="plots/{plot_file}"></iframe>
-                        </div>
-                    </div>
-                '''
-            else:
-                html_content += f"<p>Context KDE plot not available for {clean_metric_name}.</p>"
-        # END OF Context Similarity Distributions Section
+            html_content += """
+                </div>
+            """
+            # End of new distribution section layout
 
         # Ensure the final part of HTML is also correctly appended.
         html_content += """

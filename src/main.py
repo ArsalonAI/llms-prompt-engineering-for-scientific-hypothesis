@@ -29,7 +29,7 @@ def load_paper_content():
     print(f"Loading PDF from: {pdf_path}")
     return extract_paper_content(pdf_path)
 
-def run_experiments(paper_content, num_ideas=15):
+def run_experiments(paper_content, num_ideas=5):
     """
     Run multiple experiments with different prompt techniques.
     
@@ -74,15 +74,27 @@ def run_experiments(paper_content, num_ideas=15):
         
         # Run experiments
         print("\n=== Running Scientific Hypothesis Experiment ===")
-        scientific_results = scientific_runner.run("Scientific_Hypothesis", paper_content)
+        scientific_results = scientific_runner.run(
+            "Scientific_Hypothesis", 
+            paper_content,
+            skip_intermediate_calculations=True
+        )
         experiment_results["Scientific_Hypothesis"] = scientific_results
         
         print("\n=== Running Role-Based Hypothesis Experiment ===")
-        role_based_results = role_based_runner.run("Role_Based_Hypothesis", paper_content)
+        role_based_results = role_based_runner.run(
+            "Role_Based_Hypothesis", 
+            paper_content,
+            skip_intermediate_calculations=True
+        )
         experiment_results["Role_Based_Hypothesis"] = role_based_results
         
         print("\n=== Running Few-Shot Hypothesis Experiment ===")
-        few_shot_results = few_shot_runner.run("Few_Shot_Hypothesis", paper_content)
+        few_shot_results = few_shot_runner.run(
+            "Few_Shot_Hypothesis", 
+            paper_content,
+            skip_intermediate_calculations=True
+        )
         experiment_results["Few_Shot_Hypothesis"] = few_shot_results
         
         # Collect all experiment results
@@ -150,19 +162,37 @@ def main():
     if "statistical_tests" in analysis_results.get("comparison_results", {}):
         for metric, tests in analysis_results["comparison_results"]["statistical_tests"].items():
             print(f"\n--- {metric.title()} --- ")
-            header = "Comparison".ljust(50) + "MW p-val".ljust(12) + "T-Test p-val".ljust(15) + "KS p-val".ljust(12) + "Effect Size".ljust(15) + "Interpretation"
+            header = "Comparison".ljust(50) + "KS p-val".ljust(12) + "Effect Size".ljust(15) + "Interpretation"
             print(header)
             print("-" * len(header))
+            
             if not tests:
-                print("No pairwise comparisons available for this metric.")
+                print("No statistical test results available for this metric.")
                 continue
+            
+            # Print Kruskal-Wallis test result first if available
+            if "kruskal_wallis" in tests:
+                kw_test = tests["kruskal_wallis"]
+                kw_line = "Kruskal-Wallis (overall)".ljust(50)
+                kw_line += f"{kw_test['p_value']:.4f}".ljust(12)
+                kw_line += "N/A".ljust(15)
+                kw_line += "N/A"
+                print(kw_line)
+            
+            # Print pairwise KS test results
             for comparison, result in tests.items():
-                mw_p = result.get("mann_whitney", {}).get("p_value", float('nan'))
-                t_p = result.get("t_test", {}).get("p_value", float('nan'))
-                ks_p = result.get("ks_test", {}).get("p_value", float('nan')) 
-                cohen_d = result.get("effect_size", {}).get("cohen_d", float('nan'))
-                interpretation = result.get("effect_size", {}).get("interpretation", "N/A")
-                print(f"{comparison.ljust(50)}{mw_p:<12.4f}{t_p:<15.4f}{ks_p:<12.4f}{cohen_d:<15.4f}{interpretation}")
+                if comparison == "kruskal_wallis":  # Skip, already printed
+                    continue
+                    
+                ks_p = result.get("ks_test", {}).get("p_value", float('nan'))
+                effect_size = result.get("effect_size", {}).get("cohen_d", float('nan'))
+                interpretation = result.get("effect_size", {}).get("interpretation", "unknown")
+                
+                line = comparison.ljust(50)
+                line += f"{ks_p:.4f}".ljust(12)
+                line += f"{effect_size:.4f}".ljust(15)
+                line += interpretation
+                print(line)
     else:
         print("No statistical test results available.")
 

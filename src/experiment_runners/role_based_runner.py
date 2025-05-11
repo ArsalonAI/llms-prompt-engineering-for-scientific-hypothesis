@@ -23,9 +23,7 @@ class RoleBasedHypothesisRunner(BaseExperimentRunner):
             Dictionary containing experiment configuration
         """
         # Generate system prompt similar to scientific method
-        system_prompt = generate_scientific_system_prompt(
-            abstract=paper_content['abstract']
-        )
+        system_prompt = generate_scientific_system_prompt()
         
         # Create combined text for role-based prompt
         combined_text = f"Abstract: {paper_content['abstract']}\n\nMethods: {paper_content['methods']}"

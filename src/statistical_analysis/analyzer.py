@@ -180,11 +180,13 @@ class StatisticalAnalyzer:
             
             for comparison, result in tests.items():
                 try:
+                    # Skip the Kruskal-Wallis test entry
+                    if comparison == "kruskal_wallis":
+                        continue
+                        
                     # Check if difference is statistically significant
                     is_significant = (
-                        result["mann_whitney"]["significant"] or 
-                        result["t_test"]["significant"] or
-                        result.get("ks_test", {}).get("significant", False)  # Add KS test significance
+                        result.get("ks_test", {}).get("significant", False)  # KS test significance
                     )
                     
                     # Convert effect size to float if it's a string
@@ -213,22 +215,16 @@ class StatisticalAnalyzer:
                         
                         # Ensure p-values are numeric
                         try:
-                            p_value_mw = float(result["mann_whitney"]["p_value"])
-                            p_value_t = float(result["t_test"]["p_value"])
-                            p_value_ks = float(result.get("ks_test", {}).get("p_value", 1.0)) # Add KS p-value, default to 1.0 if not present
+                            p_value_ks = float(result.get("ks_test", {}).get("p_value", 1.0)) # KS p-value, default to 1.0 if not present
                         except (ValueError, TypeError):
                             print(f"[WARNING] Invalid p-values in {metric} for {comparison}")
-                            p_value_mw = 1.0  # Default to non-significant
-                            p_value_t = 1.0   # Default to non-significant
                             p_value_ks = 1.0  # Default to non-significant
                         
                         significant_diffs[metric].append({
                             "comparison": comparison,
                             "effect_size": effect_size,
                             "effect_interpretation": result["effect_size"]["interpretation"],
-                            "p_value_mw": p_value_mw,
-                            "p_value_t": p_value_t,
-                            "p_value_ks": p_value_ks, # Add KS p-value
+                            "p_value_ks": p_value_ks, # KS p-value
                             "better_method": better_method
                         })
                 except Exception as e:
@@ -288,7 +284,7 @@ class StatisticalAnalyzer:
                 # Record the finding
                 finding = (
                     f"{better_method} is significantly better than {worse_method} for {metric} "
-                    f"(p_mw={diff['p_value_mw']:.4f}, p_t={diff['p_value_t']:.4f}, p_ks={diff['p_value_ks']:.4f}, "
+                    f"(p_ks={diff['p_value_ks']:.4f}, "
                     f"effect size={abs(diff['effect_size']):.2f})"
                 )
                 metric_conclusions["significant_findings"].append(finding)
@@ -475,6 +471,7 @@ class StatisticalAnalyzer:
             </div>
             
             <h3>Statistical Significance Tests</h3>
+            <p class="section-description">This section presents the results of statistical tests comparing the distributions of scores. The Kruskal-Wallis test evaluates if there are statistically significant differences across all experiment types, while the Kolmogorov-Smirnov test compares distributions between pairs of experiment types.</p>
             <div style=\"max-height: 400px; overflow-y: auto;\">
             <div class=\"tabset\" id=\"evidence-tabs\">
         """
@@ -505,8 +502,6 @@ class StatisticalAnalyzer:
                             <th>Better Method</th>
                             <th>Effect Size</th>
                             <th>Interpretation</th>
-                            <th>Mann-Whitney p-value</th>
-                            <th>t-test p-value</th>
                             <th>KS Test p-value</th>
                         </tr>
                 """
@@ -518,8 +513,6 @@ class StatisticalAnalyzer:
                             <td><strong>{diff["better_method"]}</strong></td>
                             <td>{diff["effect_size"]:.4f}</td>
                             <td>{diff["effect_interpretation"]}</td>
-                            <td>{diff["p_value_mw"]:.4f}</td>
-                            <td>{diff["p_value_t"]:.4f}</td>
                             <td>{diff["p_value_ks"]:.4f}</td>
                         </tr>
                     """

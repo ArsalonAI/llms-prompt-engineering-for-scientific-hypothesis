@@ -21,7 +21,8 @@ def run_idea_generation_batch(
     context: Optional[str] = None,
     num_ideas: int = 10,
     max_pairwise_comparisons: int = 500,  # Limit pairwise comparisons for large batches
-    sampling_strategy: str = "auto"  # Can be "all", "random", "stratified" or "auto"
+    sampling_strategy: str = "auto",  # Can be "all", "random", "stratified" or "auto"
+    skip_intermediate_calculations: bool = True  # Whether to skip intermediate similarity calculations
 ) -> Dict[str, Any]:
     """Run a batch of idea generation experiments.
     
@@ -36,6 +37,7 @@ def run_idea_generation_batch(
         num_ideas: Number of ideas to generate
         max_pairwise_comparisons: Maximum number of pairwise comparisons to perform (set to -1 for all)
         sampling_strategy: How to sample pairwise comparisons: "all", "random", "stratified", or "auto"
+        skip_intermediate_calculations: Whether to skip intermediate similarity calculations (faster)
         
     Returns:
         Dictionary containing the results
@@ -58,6 +60,7 @@ def run_idea_generation_batch(
     
     # Generate ideas in batches
     batch_size = 5
+    total_ideas_generated = 0 # Counter for tracking progress
     for i in range(0, num_ideas, batch_size):
         current_batch_size = min(batch_size, num_ideas - i)
         print(f"\n[INFO] Generating ideas {i+1}-{i+current_batch_size} of {num_ideas}...")
@@ -66,21 +69,23 @@ def run_idea_generation_batch(
         # Generate ideas
         ideas = []
         for j in range(current_batch_size):
-            print(f"  Generating idea {i+j+1}/{num_ideas}...", end="\r")
+            print(f"  Generating idea {i+j+1}/{num_ideas}... ({total_ideas_generated} completed)", end="\r")
             idea = llama_fn(prompt, context=context)
             ideas.append(idea)
+            total_ideas_generated += 1
         
         # Evaluate quality
         print(f"  Evaluating quality of {len(ideas)} ideas...", end="\r")
         quality_scores = [quality_evaluator(idea, context=context) for idea in ideas]
         
-        # Only calculate within-batch similarities for progress tracking
+        # Only calculate within-batch similarities for progress tracking if not skipping
         # Skip this for large batches to save time
-        if len(ideas) <= 10:
+        if not skip_intermediate_calculations and len(ideas) <= 10:
             cosine_sims = []
             self_bleu_scores = []
             bertscore_scores = []
             
+            print(f"  Calculating intermediate similarity metrics...", end="\r")
             for j in range(len(ideas)):
                 for k in range(j + 1, len(ideas)):
                     # Cosine similarity
@@ -116,7 +121,7 @@ def run_idea_generation_batch(
         results["quality_scores"].extend(quality_scores)
         
         batch_time = time.time() - batch_start
-        print(f"  Batch {i//batch_size + 1} completed in {batch_time:.1f} seconds              ")
+        print(f"  Batch {i//batch_size + 1} completed in {batch_time:.1f} seconds ({total_ideas_generated}/{num_ideas} ideas total)")
     
     # Now that all ideas are generated, calculate complete pairwise similarity metrics
     # This ensures we compare all ideas to each other, including those across different batches
@@ -255,16 +260,23 @@ def run_idea_generation_batch(
         print(f"[DEBUG] run_idea_generation_batch: Context preview for similarity calc: '{preview}...'")
 
     if context and results["ideas"]:
+        context_self_bleu_scores = [] # Initialize list for context Self-BLEU
         for idx, idea_text in enumerate(results["ideas"]):
             if idx % 5 == 0 or idx == len(results["ideas"]) - 1:
                 print(f"  Progress: {idx+1}/{len(results['ideas'])}   ", end="\r")
-            context_cosine_scores.append(get_cosine_similarity(idea_text, [context]))
-            context_self_bleu_scores.append(get_self_bleu(idea_text, [context]))
-            context_bertscore_scores.append(get_bertscore(idea_text, [context]))
+            cosine_score = get_cosine_similarity(idea_text, [context])
+            # Calculate context Self-BLEU (idea vs. context)
+            self_bleu_score = get_self_bleu(idea_text, [context]) 
+            bertscore_score = get_bertscore(idea_text, [context])
+            context_cosine_scores.append(cosine_score)
+            context_self_bleu_scores.append(self_bleu_score) # Store context Self-BLEU
+            context_bertscore_scores.append(bertscore_score)
+            
+        print(f"\n[DEBUG] Context similarity calculation complete")
         # Add DEBUG logging after calculations
-        print(f"[DEBUG] run_idea_generation_batch: Calculated context_cosine_scores. Count: {len(context_cosine_scores)}. First 3: {context_cosine_scores[:3]}")
-        print(f"[DEBUG] run_idea_generation_batch: Calculated context_self_bleu_scores. Count: {len(context_self_bleu_scores)}. First 3: {context_self_bleu_scores[:3]}")
-        print(f"[DEBUG] run_idea_generation_batch: Calculated context_bertscore_scores. Count: {len(context_bertscore_scores)}. First 3: {context_bertscore_scores[:3]}")
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_cosine_scores. Count: {len(context_cosine_scores)}. Preview: {context_cosine_scores[:3]}")
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_self_bleu_scores. Count: {len(context_self_bleu_scores)}. Preview: {context_self_bleu_scores[:3]}") # Log Self-BLEU
+        print(f"[DEBUG] run_idea_generation_batch: Calculated context_bertscore_scores. Count: {len(context_bertscore_scores)}. Preview: {context_bertscore_scores[:3]}")
     else:
         # Ensure this print statement is properly newlined after the progress indicator from the loop might have used \r
         print(f"\n[INFO] run_idea_generation_batch: Skipping context similarity calculation. Context present: {bool(context)}, Ideas present: {bool(results.get('ideas', []))}")
@@ -275,7 +287,7 @@ def run_idea_generation_batch(
     avg_pairwise_bertscore = np.mean(results["bertscore_scores"]) if results["bertscore_scores"] else 0.0
     
     avg_context_cosine = np.mean(context_cosine_scores) if context_cosine_scores else 0.0
-    avg_context_self_bleu = np.mean(context_self_bleu_scores) if context_self_bleu_scores else 0.0
+    avg_context_self_bleu = np.mean(context_self_bleu_scores) if context_self_bleu_scores else 0.0 # Average for Self-BLEU
     avg_context_bertscore = np.mean(context_bertscore_scores) if context_bertscore_scores else 0.0
 
     # Track performance stats
@@ -302,6 +314,21 @@ def run_idea_generation_batch(
             print(f"  Std:  {std:.4f}")
             print(f"  Range: [{min(values):.4f}, {max(values):.4f}]")
             print(f"  Samples: {len(values)}")
+    
+    # Also log context metrics if available
+    if context_cosine_scores or context_bertscore_scores or context_self_bleu_scores: # Added self_bleu
+        print("\n=== Context Similarity Statistics ===")
+        for metric_name, values, avg in [
+            ("Context Cosine", context_cosine_scores, avg_context_cosine),
+            ("Context Self-BLEU", context_self_bleu_scores, avg_context_self_bleu), # Added self_bleu
+            ("Context BERTScore", context_bertscore_scores, avg_context_bertscore)
+        ]:
+            if values:
+                print(f"{metric_name}:")
+                print(f"  Mean: {avg:.4f}")
+                print(f"  Std:  {np.std(values):.4f}")
+                print(f"  Range: [{min(values):.4f}, {max(values):.4f}]")
+                print(f"  Samples: {len(values)}")
     
     # Prepare data for logging
     log_data = {
@@ -337,8 +364,8 @@ def run_idea_generation_batch(
         # Context-based scores (raw list and average for cosine)
         "context_cosine_scores_raw": context_cosine_scores, # List of context cosine for each idea
         "avg_context_cosine_similarity": avg_context_cosine,
-        "context_self_bleu_scores_raw": context_self_bleu_scores,
-        "avg_context_self_bleu_similarity": avg_context_self_bleu,
+        "context_self_bleu_scores_raw": context_self_bleu_scores, # Add raw Self-BLEU scores
+        "avg_context_self_bleu_similarity": avg_context_self_bleu, # Add average Self-BLEU
         "context_bertscore_scores_raw": context_bertscore_scores,
         "avg_context_bertscore_similarity": avg_context_bertscore,
         
@@ -350,8 +377,14 @@ def run_idea_generation_batch(
     }
     # Add DEBUG logging before calling tracker.log_result
     print(f"[DEBUG] run_idea_generation_batch: About to log results. Checking context_cosine_scores_raw. Count: {len(log_data.get('context_cosine_scores_raw', []))}")
-    print(f"[DEBUG] run_idea_generation_batch: Checking context_self_bleu_scores_raw. Count: {len(log_data.get('context_self_bleu_scores_raw', []))}")
+    if log_data.get('context_cosine_scores_raw'):
+        print(f"[DEBUG] run_idea_generation_batch: First 3 context_cosine_scores: {log_data['context_cosine_scores_raw'][:3]}")
+    print(f"[DEBUG] run_idea_generation_batch: Checking context_self_bleu_scores_raw. Count: {len(log_data.get('context_self_bleu_scores_raw', []))}") # Log Self-BLEU
+    if log_data.get('context_self_bleu_scores_raw'):
+        print(f"[DEBUG] run_idea_generation_batch: First 3 context_self_bleu_scores: {log_data['context_self_bleu_scores_raw'][:3]}") # Log Self-BLEU
     print(f"[DEBUG] run_idea_generation_batch: Checking context_bertscore_scores_raw. Count: {len(log_data.get('context_bertscore_scores_raw', []))}")
+    if log_data.get('context_bertscore_scores_raw'):
+        print(f"[DEBUG] run_idea_generation_batch: First 3 context_bertscore_scores: {log_data['context_bertscore_scores_raw'][:3]}")
     tracker.log_result(run_id, log_data)
     
     return results

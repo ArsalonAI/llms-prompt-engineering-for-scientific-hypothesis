@@ -57,13 +57,15 @@ class BaseExperimentRunner:
         """
         raise NotImplementedError("Subclasses must implement prepare_experiment")
     
-    def run(self, experiment_name: str, paper_content: Dict[str, str]) -> Dict[str, Any]:
+    def run(self, experiment_name: str, paper_content: Dict[str, str], 
+             skip_intermediate_calculations: bool = True) -> Dict[str, Any]:
         """
         Run the experiment.
         
         Args:
             experiment_name: Name of the experiment
             paper_content: Dictionary containing paper content
+            skip_intermediate_calculations: Whether to skip intermediate calculations for speed
             
         Returns:
             Dictionary containing experiment results
@@ -102,7 +104,8 @@ class BaseExperimentRunner:
             prompt=config["main_prompt"],
             system_prompt=config["system_prompt"],
             context=context,
-            run_id=run_id
+            run_id=run_id,
+            skip_intermediate_calculations=skip_intermediate_calculations
         )
         
         # Store results for this experiment
@@ -118,7 +121,8 @@ class BaseExperimentRunner:
         prompt: str, 
         system_prompt: str, 
         context: str, 
-        run_id: str
+        run_id: str,
+        skip_intermediate_calculations: bool = True
     ) -> Dict[str, Any]:
         """
         Run the idea generation batch using the imported function.
@@ -128,6 +132,7 @@ class BaseExperimentRunner:
             system_prompt: System prompt to use
             context: Context information for the model
             run_id: Unique identifier for this run
+            skip_intermediate_calculations: Whether to skip intermediate calculations for speed
             
         Returns:
             Dictionary containing experiment results
@@ -146,7 +151,8 @@ class BaseExperimentRunner:
             quality_evaluator=self._evaluate_quality,
             tracker=self.tracker,
             context=context,
-            num_ideas=self.num_ideas
+            num_ideas=self.num_ideas,
+            skip_intermediate_calculations=skip_intermediate_calculations
         )
         
         return results

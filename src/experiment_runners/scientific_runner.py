@@ -32,9 +32,7 @@ class ScientificHypothesisRunner(BaseExperimentRunner):
             Dictionary containing experiment configuration
         """
         # Generate experiment-specific prompts
-        system_prompt = generate_scientific_system_prompt(
-            abstract=paper_content['abstract']
-        )
+        system_prompt = generate_scientific_system_prompt()
         
         main_prompt = generate_scientific_hypothesis_prompt(
             domain=self.domain,

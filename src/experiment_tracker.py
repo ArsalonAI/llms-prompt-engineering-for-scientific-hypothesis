@@ -194,7 +194,7 @@ class ExperimentTracker:
             'pairwise_total_possible': result.get('pairwise_total_possible'),
             'pairwise_actual': result.get('pairwise_actual')
         }
-
+        
         # Explicitly copy critical raw score lists and other potentially complex objects
         # This ensures they are in df_row if present in the result dict
         critical_list_keys = [
@@ -437,9 +437,18 @@ class ExperimentTracker:
            The input Series is expected to contain one entry per run (log_result call),
            and that entry is now a list of raw scores for that run.
         """
+        # Debug the incoming data
+        print(f"[DEBUG] _calculate_similarity_stats received data type: {type(metric_data)}")
+        if not metric_data.empty:
+            print(f"[DEBUG] First element type: {type(metric_data.iloc[0])}")
+            print(f"[DEBUG] First element content preview: {str(metric_data.iloc[0])[:100]}...")
+        else:
+            print(f"[DEBUG] metric_data is empty")
+        
         # metric_data is a Series. If one log_result call, it has one element: the list of scores.
         if metric_data.empty or metric_data.iloc[0] is None or not isinstance(metric_data.iloc[0], list) or not metric_data.iloc[0]:
             # Handle cases where the data is missing, not a list, or an empty list for the first (and only) run.
+            print(f"[WARNING] Invalid or empty metric data: {metric_data.iloc[0] if not metric_data.empty else 'empty series'}")
             return {
                 "mean": 0.0,
                 "median": 0.0,
@@ -508,81 +517,83 @@ class ExperimentTracker:
             return np.array([]), np.array([])
 
     def _calculate_avg_pairwise_per_idea(self, num_ideas: int, pairwise_scores: List[float]) -> List[float]:
-        """Calculates the average pairwise similarity for each idea against all others.
+        """Calculates the average pairwise similarity for each idea against all others."""
+        print(f"\n[DEBUG_AVG_PAIRWISE] Inputs: num_ideas={num_ideas}, len(pairwise_scores)={len(pairwise_scores)}")
+        if pairwise_scores:
+            print(f"[DEBUG_AVG_PAIRWISE] pairwise_scores (first 10): {str(pairwise_scores[:10])}")
+        else:
+            print(f"[DEBUG_AVG_PAIRWISE] pairwise_scores is empty or None.")
 
-        Args:
-            num_ideas: The total number of ideas generated.
-            pairwise_scores: A flat list of pairwise scores, assumed to be in 
-                             itertools.combinations order (e.g., (0,1), (0,2), ..., (0,N-1), (1,2), ...).
-
-        Returns:
-            A list of average scores, one per idea. Returns empty list if input is invalid.
-        """
         if num_ideas < 2 or not pairwise_scores:
+            print(f"[DEBUG_AVG_PAIRWISE] Returning early: num_ideas < 2 or no pairwise_scores.")
             return [0.0] * num_ideas
 
         expected_num_scores = num_ideas * (num_ideas - 1) // 2
         if len(pairwise_scores) != expected_num_scores:
-            print(f"[WARN] _calculate_avg_pairwise_per_idea: Expected {expected_num_scores} scores for {num_ideas} ideas, but got {len(pairwise_scores)}.")
-            
-            # If we have fewer scores than expected, we'll use what we have and treat missing comparisons as zeros/NA
-            # This is better than returning all zeros when we do have some valid scores
+            print(f"[WARN_AVG_PAIRWISE] Expected {expected_num_scores} scores, got {len(pairwise_scores)}.")
             if len(pairwise_scores) < expected_num_scores:
-                print(f"[INFO] Will use available {len(pairwise_scores)} scores and impute NA for missing comparisons")
+                print(f"[INFO_AVG_PAIRWISE] Using available {len(pairwise_scores)} scores.")
             else:
-                print(f"[WARN] Extra scores will be ignored")
+                print(f"[WARN_AVG_PAIRWISE] Extra scores will be ignored.")
                 pairwise_scores = pairwise_scores[:expected_num_scores]
         
-        # Create a structure to hold scores involving each idea index
-        # Using a list of lists: scores_per_idea[i] holds scores involving idea i
         scores_per_idea = [[] for _ in range(num_ideas)]
-        
-        # Map the flat list back to pairs
-        # Try to map as many scores as possible, even if incomplete
         current_score_index = 0
         for i in range(num_ideas):
             for j in range(i + 1, num_ideas):
                 if current_score_index < len(pairwise_scores):
                     score = pairwise_scores[current_score_index]
-                    # Score applies to both idea i and idea j
                     scores_per_idea[i].append(score)
                     scores_per_idea[j].append(score)
                     current_score_index += 1
                 else:
-                    # We've run out of scores - leave the remaining comparisons as empty
                     break
             if current_score_index >= len(pairwise_scores):
                 break
         
-        # Calculate the average for each idea
+        # Debug scores_per_idea
+        # for idx, idea_scores_list in enumerate(scores_per_idea):
+        #     print(f"[DEBUG_AVG_PAIRWISE] scores_per_idea[{idx}] (first 5): {str(idea_scores_list[:5])} (Total: {len(idea_scores_list)})")
+
         avg_scores = []
         for i in range(num_ideas):
             idea_scores = scores_per_idea[i]
             if idea_scores:
-                # Convert to Series to handle NaN values properly
                 idea_score_series = pd.to_numeric(pd.Series(idea_scores), errors='coerce').dropna()
                 if not idea_score_series.empty:
                     avg_scores.append(float(idea_score_series.mean()))
                 else:
+                    # print(f"[DEBUG_AVG_PAIRWISE] Idea {i}: idea_score_series was empty after dropna. Original: {idea_scores}")
                     avg_scores.append(0.0)
             else:
-                # No scores for this idea
+                # print(f"[DEBUG_AVG_PAIRWISE] Idea {i}: no scores found in scores_per_idea.")
                 avg_scores.append(0.0)
-                
+        
+        print(f"[DEBUG_AVG_PAIRWISE] Calculated avg_scores (first 10): {str(avg_scores[:10])} (Total: {len(avg_scores)})")
         return avg_scores
 
     def _get_similarity_summary(self, similarity_type: str) -> Dict[str, Dict[str, float]]:
         """Helper function to get summary statistics for either context or pairwise similarities."""
         metrics = {
-            'context': ['context_cosine', 'context_self_bleu', 'context_bertscore'],
-            'pairwise': ['avg_cosine_similarity', 'avg_self_bleu', 'avg_bertscore']
+            'context': ['context_cosine_scores_raw', 'context_self_bleu_scores_raw', 'context_bertscore_scores_raw'],
+            'pairwise': ['cosine_similarities', 'self_bleu_scores', 'bertscore_scores']  # Fixed column name from 'cosine' to 'cosine_similarities'
         }
+        
+        # Add debugging
+        print(f"\n[DEBUG] Getting {similarity_type} similarity summary")
+        print(f"[DEBUG] DataFrame columns: {self._results_df.columns.tolist()}")
+        print(f"[DEBUG] Looking for metrics: {metrics[similarity_type]}")
         
         summary = {}
         for metric in metrics[similarity_type]:
             if metric in self._results_df.columns:
-                display_name = metric.replace('context_', '').replace('avg_', '')
-                summary[display_name] = self._calculate_similarity_stats(self._results_df[metric])
+                # Remove _scores_raw and _similarities suffixes for display names
+                display_name = metric.replace('context_', '').replace('_scores_raw', '').replace('_similarities', '')
+                stats = self._calculate_similarity_stats(self._results_df[metric])
+                summary[display_name] = stats
+                print(f"[DEBUG] Found metric '{metric}' -> '{display_name}': mean={stats['mean']}, median={stats['median']}")
+            else:
+                print(f"[DEBUG] Metric '{metric}' not found in DataFrame columns")
         
         return summary
 
@@ -798,58 +809,65 @@ class ExperimentTracker:
         if self._results_df is None or self._results_df.empty:
             return None
 
-        # We expect one row in _results_df representing the entire experiment run's aggregated data (lists of scores).
         run_data = self._results_df.iloc[0]
 
-        ideas_list = run_data.get('ideas', []) # Assuming 'ideas' key holds list of idea strings
-        quality_evals_list = run_data.get('quality_scores', []) # List of dicts from HypothesisEvaluator
+        ideas_list = run_data.get('ideas', [])
+        quality_evals_list = run_data.get('quality_scores', [])
         
-        # BUGFIX: Make sure quality_evals_list contains dictionaries rather than float values
-        # This handles cases where quality scores might be simple numbers instead of dictionaries
         if quality_evals_list and not all(isinstance(item, dict) for item in quality_evals_list if item is not None):
-            # Convert non-dictionary values to a standard format with evaluation and evaluation_full keys
             quality_evals_list = [
                 item if isinstance(item, dict) else {'evaluation': str(item), 'evaluation_full': str(item)}
                 for item in quality_evals_list
             ]
         
-        # Context scores are per idea, matching the order in ideas_list
-        # Fetch from the correct columns in run_data (self._results_df.iloc[0])
-        # These columns ('context_cosine', etc.) should already contain lists of raw scores.
-        ctx_cosine_scores_list = run_data.get('context_cosine', [])
-        ctx_self_bleu_scores_list = run_data.get('context_self_bleu', [])
-        ctx_bertscore_scores_list = run_data.get('context_bertscore', [])
+        # Correctly fetch raw context scores
+        ctx_cosine_scores_list = run_data.get('context_cosine_scores_raw', [])
+        ctx_self_bleu_scores_list = run_data.get('context_self_bleu_scores_raw', [])
+        ctx_bertscore_scores_list = run_data.get('context_bertscore_scores_raw', [])
         
-        # Safeguard: Ensure they are lists, especially if only one idea was generated
-        # and a single float might have been stored (though current pipeline should make them lists).
-        if not isinstance(ctx_cosine_scores_list, list):
-            ctx_cosine_scores_list = [ctx_cosine_scores_list] if pd.notna(ctx_cosine_scores_list) else []
-        
-        if not isinstance(ctx_self_bleu_scores_list, list):
-            ctx_self_bleu_scores_list = [ctx_self_bleu_scores_list] if pd.notna(ctx_self_bleu_scores_list) else []
-        
-        if not isinstance(ctx_bertscore_scores_list, list):
-            ctx_bertscore_scores_list = [ctx_bertscore_scores_list] if pd.notna(ctx_bertscore_scores_list) else []
+        # Ensure lists
+        if not isinstance(ctx_cosine_scores_list, list): ctx_cosine_scores_list = [ctx_cosine_scores_list] if pd.notna(ctx_cosine_scores_list) else []
+        if not isinstance(ctx_self_bleu_scores_list, list): ctx_self_bleu_scores_list = [ctx_self_bleu_scores_list] if pd.notna(ctx_self_bleu_scores_list) else []
+        if not isinstance(ctx_bertscore_scores_list, list): ctx_bertscore_scores_list = [ctx_bertscore_scores_list] if pd.notna(ctx_bertscore_scores_list) else []
 
         if not ideas_list:
-            return None # No ideas to display
+            return None
 
         num_ideas = len(ideas_list)
 
-        # Prepare data for table cells
+        # Calculate average pairwise similarity per idea
+        pairwise_cosine_flat = run_data.get('cosine_similarities', [])
+        pairwise_self_bleu_flat = run_data.get('self_bleu_scores', [])
+        pairwise_bertscore_flat = run_data.get('bertscore_scores', [])
+
+        avg_pairwise_cosine_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_cosine_flat if isinstance(pairwise_cosine_flat, list) else [])
+        avg_pairwise_bleu_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_self_bleu_flat if isinstance(pairwise_self_bleu_flat, list) else [])
+        avg_pairwise_bert_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_bertscore_flat if isinstance(pairwise_bertscore_flat, list) else [])
+
         idea_indices = [i + 1 for i in range(num_ideas)]
         eval_summaries = [quality_evals_list[i].get('evaluation', 'N/A') if i < len(quality_evals_list) and quality_evals_list[i] is not None else 'N/A' for i in range(num_ideas)]
         eval_full_texts = [quality_evals_list[i].get('evaluation_full', 'N/A').replace('\n', '<br>') if i < len(quality_evals_list) and quality_evals_list[i] is not None else 'N/A' for i in range(num_ideas)]
         
         context_similarity_strings = []
+        pairwise_similarity_strings = []
+
         for i in range(num_ideas):
-            cos_sim = ctx_cosine_scores_list[i] if i < len(ctx_cosine_scores_list) and pd.notna(ctx_cosine_scores_list[i]) else 0.0
-            bleu_sim = ctx_self_bleu_scores_list[i] if i < len(ctx_self_bleu_scores_list) and pd.notna(ctx_self_bleu_scores_list[i]) else 0.0
-            bert_sim = ctx_bertscore_scores_list[i] if i < len(ctx_bertscore_scores_list) and pd.notna(ctx_bertscore_scores_list[i]) else 0.0
+            cos_sim_ctx = ctx_cosine_scores_list[i] if i < len(ctx_cosine_scores_list) and pd.notna(ctx_cosine_scores_list[i]) else 0.0
+            bleu_sim_ctx = ctx_self_bleu_scores_list[i] if i < len(ctx_self_bleu_scores_list) and pd.notna(ctx_self_bleu_scores_list[i]) else 0.0
+            bert_sim_ctx = ctx_bertscore_scores_list[i] if i < len(ctx_bertscore_scores_list) and pd.notna(ctx_bertscore_scores_list[i]) else 0.0
             context_similarity_strings.append(
-                f"cos: {cos_sim:.3f}<br>" 
-                f"bleu: {bleu_sim:.3f}<br>" 
-                f"bert: {bert_sim:.3f}"
+                f"cos: {cos_sim_ctx:.3f}<br>" 
+                f"bleu: {bleu_sim_ctx:.3f}<br>" 
+                f"bert: {bert_sim_ctx:.3f}"
+            )
+
+            cos_sim_pair = avg_pairwise_cosine_per_idea[i] if i < len(avg_pairwise_cosine_per_idea) else 0.0
+            bleu_sim_pair = avg_pairwise_bleu_per_idea[i] if i < len(avg_pairwise_bleu_per_idea) else 0.0
+            bert_sim_pair = avg_pairwise_bert_per_idea[i] if i < len(avg_pairwise_bert_per_idea) else 0.0
+            pairwise_similarity_strings.append(
+                f"cos: {cos_sim_pair:.3f}<br>" 
+                f"bleu: {bleu_sim_pair:.3f}<br>" 
+                f"bert: {bert_sim_pair:.3f}"
             )
 
         fig = go.Figure(data=[go.Table(
@@ -857,6 +875,7 @@ class ExperimentTracker:
                 values=[
                     'Idea #', 'Generated Idea Text', 'Evaluation',
                     'Similarity to Original Context',
+                    'Avg. Similarity to Other Ideas', # New column header
                     'Full Evaluation Text'
                 ],
                 fill_color='royalblue',
@@ -869,6 +888,7 @@ class ExperimentTracker:
                     ideas_list,
                     eval_summaries,
                     context_similarity_strings,
+                    pairwise_similarity_strings, # New column data
                     eval_full_texts
                 ],
                 fill_color='lavender',
@@ -879,7 +899,7 @@ class ExperimentTracker:
         
         fig.update_layout(
             title=dict(text="Detailed Experiment Results: Per Idea Analysis", x=0.5, xanchor='center'),
-            height=max(400, 35 * num_ideas + 100), # Adjust height based on number of ideas
+            height=max(400, 35 * num_ideas + 100),
             margin=dict(t=50, l=10, r=10, b=10)
         )
         
@@ -887,77 +907,78 @@ class ExperimentTracker:
 
     def _create_heatmap(self, metric_col_name: str, plot_title_suffix: str) -> go.Figure:
         """Create a heatmap visualization for pairwise comparisons for a given metric."""
+        print(f"\n[DEBUG_HEATMAP] Attempting to create heatmap for: {metric_col_name} ({plot_title_suffix})")
         if self._results_df is None or self._results_df.empty:
-            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - _results_df is None or empty.")
+            print(f"[DEBUG_HEATMAP] Skipped - _results_df is None or empty.")
             return None
 
         run_data = self._results_df.iloc[0]
-        # Try to infer num_ideas from the length of the 'ideas' list if 'num_ideas' is 0 or missing
         num_ideas = run_data.get('num_ideas', 0)
         ideas_list = run_data.get('ideas', [])
-        if not isinstance(ideas_list, list): ideas_list = [] # ensure it's a list
+        if not isinstance(ideas_list, list): ideas_list = []
         if num_ideas == 0 and ideas_list: 
             num_ideas = len(ideas_list)
-            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Inferred num_ideas={num_ideas} from ideas list len={len(ideas_list)}.")
-
-        pairwise_scores_flat = run_data.get(metric_col_name)
-        if not isinstance(pairwise_scores_flat, list):
-            print(f"[DEBUG] Heatmap ({plot_title_suffix}): pairwise_scores_flat for '{metric_col_name}' was not a list, got {type(pairwise_scores_flat)}. Defaulting to [].")
-            pairwise_scores_flat = []
         
-        print(f"[DEBUG] Heatmap ({plot_title_suffix}): num_ideas={num_ideas}, len(pairwise_scores_flat for '{metric_col_name}')={len(pairwise_scores_flat)}")
+        pairwise_scores_flat = run_data.get(metric_col_name)
+        if not isinstance(pairwise_scores_flat, list): pairwise_scores_flat = []
+        
+        print(f"[DEBUG_HEATMAP] Inputs: metric_col_name='{metric_col_name}', num_ideas={num_ideas}")
+        print(f"[DEBUG_HEATMAP] pairwise_scores_flat (first 10): {str(pairwise_scores_flat[:10])} (Total: {len(pairwise_scores_flat)})")
+
         if num_ideas < 2:
-            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - Not enough ideas ({num_ideas}).")
+            print(f"[DEBUG_HEATMAP] Skipped - Not enough ideas ({num_ideas}).")
             return None
         if not pairwise_scores_flat:
-            print(f"[DEBUG] Heatmap ({plot_title_suffix}): Skipped - Missing or empty pairwise scores for '{metric_col_name}'. Found: {pairwise_scores_flat}")
+            print(f"[DEBUG_HEATMAP] Skipped - Missing or empty pairwise scores for '{metric_col_name}'.")
             return None
         
-        # Check if we have the actual pairs used (if sampling occurred)
-        # The 'pairwise_pairs' key should store the list of (i,j) tuples that were actually compared
         pairs_actually_compared = run_data.get('pairwise_pairs_compared', None)
+        if pairs_actually_compared:
+            print(f"[DEBUG_HEATMAP] pairs_actually_compared (first 5): {str(pairs_actually_compared[:5])} (Total: {len(pairs_actually_compared)})")
 
-        # Initialize an N x N matrix with NaNs (or a value indicating no comparison)
         similarity_matrix = np.full((num_ideas, num_ideas), np.nan)
+        print(f"[DEBUG_HEATMAP] Initialized similarity_matrix ({num_ideas}x{num_ideas}) with NaNs. Preview (up to 5x5):\n{similarity_matrix[:5,:5]}")
         
-        # Populate the diagonal with 1.0 (or a distinct value for self-similarity)
         for i in range(num_ideas):
             similarity_matrix[i, i] = 1.0 
 
         if pairs_actually_compared:
-            # If we have the specific pairs that were compared (due to sampling)
             if len(pairs_actually_compared) != len(pairwise_scores_flat):
-                print(f"[WARN] Heatmap: Mismatch between number of compared pairs ({len(pairs_actually_compared)}) and scores ({len(pairwise_scores_flat)}) for '{metric_col_name}'. Heatmap may be incomplete.")
-                # Proceed with caution, might lead to errors if lengths truly mismatch logic
+                print(f"[WARN_HEATMAP] Mismatch: len(pairs_actually_compared)={len(pairs_actually_compared)}, len(pairwise_scores_flat)={len(pairwise_scores_flat)}")
             
-            for k, (i, j) in enumerate(pairs_actually_compared):
+            for k, (r_idx, c_idx) in enumerate(pairs_actually_compared):
                 if k < len(pairwise_scores_flat):
                     score = pairwise_scores_flat[k]
-                    similarity_matrix[i, j] = score
-                    similarity_matrix[j, i] = score # Symmetric matrix
+                    if 0 <= r_idx < num_ideas and 0 <= c_idx < num_ideas: # Bounds check
+                        similarity_matrix[r_idx, c_idx] = score
+                        similarity_matrix[c_idx, r_idx] = score
+                    else:
+                        print(f"[WARN_HEATMAP] Invalid indices ({r_idx}, {c_idx}) for num_ideas={num_ideas}")
                 else:
-                    # This case implies more pairs than scores, which is problematic
                     break 
         else:
-            # If no specific pairs list, assume all pairs were compared in itertools.combinations order
             expected_num_scores = num_ideas * (num_ideas - 1) // 2
             if len(pairwise_scores_flat) != expected_num_scores:
-                print(f"[WARN] Heatmap: Expected {expected_num_scores} scores for {num_ideas} ideas (full comparison), but got {len(pairwise_scores_flat)} for '{metric_col_name}'. Heatmap may be incomplete.")
-                # We'll fill what we can
+                print(f"[WARN_HEATMAP] Mismatch (full comparison): Expected {expected_num_scores} scores, got {len(pairwise_scores_flat)}.")
 
             current_score_index = 0
-            for i in range(num_ideas):
-                for j in range(i + 1, num_ideas):
+            for r_idx in range(num_ideas):
+                for c_idx in range(r_idx + 1, num_ideas):
                     if current_score_index < len(pairwise_scores_flat):
                         score = pairwise_scores_flat[current_score_index]
-                        similarity_matrix[i, j] = score
-                        similarity_matrix[j, i] = score # Symmetric matrix
+                        similarity_matrix[r_idx, c_idx] = score
+                        similarity_matrix[c_idx, r_idx] = score
                         current_score_index += 1
                     else:
-                        # Ran out of scores, remaining pairs in matrix will be NaN
                         break
                 if current_score_index >= len(pairwise_scores_flat):
                     break
+        
+        print(f"[DEBUG_HEATMAP] Populated similarity_matrix. Preview (up to 5x5):\n{similarity_matrix[:5,:5]}")
+        # Check if matrix is all NaNs (excluding diagonal)
+        non_diag_elements = similarity_matrix[~np.eye(num_ideas, dtype=bool)]
+        if np.all(np.isnan(non_diag_elements)):
+            print(f"[WARN_HEATMAP] All non-diagonal elements of similarity_matrix are NaN for '{metric_col_name}'. Plot will likely be blank or show only diagonal.")
 
         idea_labels = [f"Idea {i+1}" for i in range(num_ideas)]
 
@@ -969,7 +990,7 @@ class ExperimentTracker:
             zmin=0, 
             zmax=1,
             text=np.around(similarity_matrix, decimals=3).astype(str),
-            hoverongaps=False, # Do not show hover for NaN values
+            hoverongaps=False,
             hovertemplate='<b>Idea X</b>: %{y}<br>' +
                           '<b>Idea Y</b>: %{x}<br>' +
                           '<b>Similarity</b>: %{z:.3f}<extra></extra>'
@@ -979,12 +1000,12 @@ class ExperimentTracker:
             title=dict(text=f"Pairwise {plot_title_suffix} Similarity Heatmap", x=0.5, xanchor='center'),
             xaxis_title="Compared Idea",
             yaxis_title="Reference Idea",
-            xaxis_side="top", # Move x-axis labels to top for standard matrix view
-            width=min(800, 40 * num_ideas + 200), # Dynamic width
-            height=min(700, 40 * num_ideas + 150), # Dynamic height
+            xaxis_side="top",
+            width=min(800, 40 * num_ideas + 200),
+            height=min(700, 40 * num_ideas + 150),
             margin=dict(t=100, b=50, l=100, r=50)
         )
-        
+        print(f"[DEBUG_HEATMAP] Successfully created heatmap figure for: {metric_col_name}")
         return fig
 
     def _create_context_similarity_plot(self) -> go.Figure:
@@ -1036,154 +1057,94 @@ class ExperimentTracker:
         
         return fig
         
-    def _create_similarity_scatter_plot(self, context_metric_col: str = 'context_cosine', 
-                                        pairwise_metric_col: str = 'avg_cosine_similarity',
+    def _create_similarity_scatter_plot(self, context_metric_col: str = 'context_cosine_scores_raw', 
+                                        pairwise_metric_col: str = 'cosine_similarities',
                                         plot_title_suffix: str = 'Cosine') -> go.Figure:
         """Create a scatter plot comparing context similarity vs. average pairwise similarity for each idea."""
+        print(f"\n[DEBUG_SCATTER] Attempting scatter plot for: context='{context_metric_col}', pairwise='{pairwise_metric_col}' ({plot_title_suffix})")
         if self._results_df is None or self._results_df.empty:
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - _results_df is None or empty.")
+            print(f"[DEBUG_SCATTER] Skipped - _results_df is None or empty.")
             return None
         
         run_data = self._results_df.iloc[0]
-
-        # Try to infer num_ideas first
         num_ideas = run_data.get('num_ideas', 0)
         ideas_list = run_data.get('ideas', [])
         if not isinstance(ideas_list, list): ideas_list = []
-        if num_ideas == 0 and ideas_list: 
-            num_ideas = len(ideas_list)
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Inferred num_ideas={num_ideas} from ideas list len={len(ideas_list)}.")
+        if num_ideas == 0 and ideas_list: num_ideas = len(ideas_list)
         
-        # If still no num_ideas, try to infer from context score list length
         context_scores_for_metric = run_data.get(context_metric_col, [])
-        if not isinstance(context_scores_for_metric, list): 
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): context_scores_for_metric for '{context_metric_col}' was not a list, got {type(context_scores_for_metric)}. Defaulting to [].")
-            context_scores_for_metric = []
-        
-        if num_ideas == 0 and context_scores_for_metric: # Try inferring num_ideas again if ideas_list was empty
-            num_ideas = len(context_scores_for_metric)
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Inferred num_ideas={num_ideas} from '{context_metric_col}' list length ({len(context_scores_for_metric)}).")
-
-        if num_ideas == 0: 
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - Final num_ideas is 0.")
-            return None
-        
-        if not ideas_list and num_ideas > 0:
-            ideas_list = [f"Idea {i+1}" for i in range(num_ideas)]
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Created placeholder idea texts for {num_ideas} ideas.")
-
-        has_context_data = len(context_scores_for_metric) > 0
+        if not isinstance(context_scores_for_metric, list): context_scores_for_metric = []
         
         pairwise_scores_flat = run_data.get(pairwise_metric_col, [])
-        if not isinstance(pairwise_scores_flat, list): 
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): pairwise_scores_flat for '{pairwise_metric_col}' was not a list, got {type(pairwise_scores_flat)}. Defaulting to [].")
-            pairwise_scores_flat = []
-        has_pairwise_data = len(pairwise_scores_flat) > 0
+        if not isinstance(pairwise_scores_flat, list): pairwise_scores_flat = []
 
-        print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): num_ideas={num_ideas}, len(context_scores '{context_metric_col}')={len(context_scores_for_metric)}, len(pairwise_scores_flat '{pairwise_metric_col}')={len(pairwise_scores_flat)}")
+        print(f"[DEBUG_SCATTER] Inputs: num_ideas={num_ideas}")
+        print(f"[DEBUG_SCATTER] context_scores ('{context_metric_col}', first 10): {str(context_scores_for_metric[:10])} (Total: {len(context_scores_for_metric)})")
+        print(f"[DEBUG_SCATTER] pairwise_scores_flat ('{pairwise_metric_col}', first 10): {str(pairwise_scores_flat[:10])} (Total: {len(pairwise_scores_flat)})")
 
-        if not has_context_data:
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Missing or empty context data in column '{context_metric_col}'. Content: {context_scores_for_metric}")
-        if not has_pairwise_data:
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Missing or empty pairwise data in column '{pairwise_metric_col}'. Content: {pairwise_scores_flat}")
-
-        if not has_context_data and not has_pairwise_data:
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Skipped - Missing both context and pairwise data.")
+        if num_ideas == 0: 
+            print(f"[DEBUG_SCATTER] Skipped - num_ideas is 0.")
             return None
         
-        x_values_raw = []
-        if has_context_data:
-            x_values_raw = context_scores_for_metric
-        
+        x_values_raw = context_scores_for_metric
         x_values = pd.to_numeric(pd.Series(x_values_raw), errors='coerce')
-
         context_available = not x_values.isnull().all()
-        if not context_available and has_context_data: # Data was present but not numeric
-             print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Context data in '{context_metric_col}' (len {len(x_values_raw)}) was not numeric after coercion. First 5 raw: {x_values_raw[:5]}")
-
 
         y_values_raw = []
-        if has_pairwise_data and num_ideas > 0: 
+        if pairwise_scores_flat and num_ideas > 0: 
             avg_pairwise_per_idea = self._calculate_avg_pairwise_per_idea(num_ideas, pairwise_scores_flat)
             y_values_raw = avg_pairwise_per_idea
-            if not y_values_raw: 
-                print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): _calculate_avg_pairwise_per_idea returned empty for '{pairwise_metric_col}' with num_ideas={num_ideas} and len(pairwise_scores_flat)={len(pairwise_scores_flat)}.")
         
         y_values = pd.to_numeric(pd.Series(y_values_raw), errors='coerce')
-        
         pairwise_available = not y_values.isnull().all()
-        if not pairwise_available and has_pairwise_data and y_values_raw: 
-             print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): Pairwise data from '{pairwise_metric_col}' (len {len(y_values_raw)}, after _calc) was not numeric. First 5 raw: {y_values_raw[:5]}")
-
-        # Pad with NaNs to match num_ideas if necessary, for consistent plotting behavior
-        # This is important if, for instance, context scores are available for all ideas, but pairwise only for some (or vice-versa)
-        # or if lists were shorter than num_ideas due to upstream issues.
-        current_x_len = len(x_values)
-        if current_x_len < num_ideas:
-            x_values = pd.concat([x_values, pd.Series([np.nan]*(num_ideas - current_x_len))], ignore_index=True)
         
+        print(f"[DEBUG_SCATTER] x_values_raw (first 10): {str(x_values_raw[:10])}")
+        print(f"[DEBUG_SCATTER] x_values (first 10, after numeric conversion): {str(x_values.head(10).tolist())}")
+        print(f"[DEBUG_SCATTER] context_available: {context_available}")
+        
+        print(f"[DEBUG_SCATTER] y_values_raw (first 10 from _calc_avg_pairwise): {str(y_values_raw[:10])}")
+        print(f"[DEBUG_SCATTER] y_values (first 10, after numeric conversion): {str(y_values.head(10).tolist())}")
+        print(f"[DEBUG_SCATTER] pairwise_available: {pairwise_available}")
+
+        # Padding (existing logic)
+        current_x_len = len(x_values)
+        if current_x_len < num_ideas: x_values = pd.concat([x_values, pd.Series([np.nan]*(num_ideas - current_x_len))], ignore_index=True)
         current_y_len = len(y_values)
-        if current_y_len < num_ideas:
-            y_values = pd.concat([y_values, pd.Series([np.nan]*(num_ideas - current_y_len))], ignore_index=True)
+        if current_y_len < num_ideas: y_values = pd.concat([y_values, pd.Series([np.nan]*(num_ideas - current_y_len))], ignore_index=True)
 
-        # Ensure hover_texts matches the longer of x_values or y_values, up to num_ideas
-        # This prevents errors if ideas_list is shorter than num_ideas after all inferences.
+        print(f"[DEBUG_SCATTER] Final x_values for plot (first 10): {str(x_values.head(10).tolist())} (Total: {len(x_values)})")
+        print(f"[DEBUG_SCATTER] Final y_values for plot (first 10): {str(y_values.head(10).tolist())} (Total: {len(y_values)})")
+
         max_len = min(num_ideas, max(len(x_values), len(y_values)))
-        hover_texts = [ideas_list[i][:50] + "..." if i < len(ideas_list) and ideas_list[i] else f"Idea {i+1}" 
-                       for i in range(max_len)]
+        hover_texts = [ideas_list[i][:50] + "..." if i < len(ideas_list) and ideas_list[i] else f"Idea {i+1}" for i in range(max_len)]
+        print(f"[DEBUG_SCATTER] hover_texts (first 5): {str(hover_texts[:5])}")
 
-        # Only attempt to plot if we have some valid points for at least one axis
         if not context_available and not pairwise_available:
-            print(f"[DEBUG] Scatter Plot ({plot_title_suffix}): No numeric data available for either axis after processing. Skipping plot generation.")
-            return None # Redundant due to earlier check, but good safeguard
+            print(f"[DEBUG_SCATTER] No numeric data for either axis. Skipping plot.")
+            return None
 
-        # Create the figure with available data
         fig = go.Figure(data=go.Scatter(
             x=x_values,
             y=y_values,
             mode='markers',
-            marker=dict(
-                size=12, 
-                color='rgba(50, 100, 200, 0.7)',
-                line=dict(width=1, color='black')
-            ),
+            marker=dict(size=12, color='rgba(50, 100, 200, 0.7)', line=dict(width=1, color='black')),
             text=hover_texts,
             hoverinfo='x+y+text'
         ))
         
-        # Adjust title based on available data
-        scatter_plot_title = f'Similarity Analysis'
-        if context_available and pairwise_available:
-            scatter_plot_title = f'Context vs. Pairwise {plot_title_suffix} Similarity'
-        elif context_available:
-            scatter_plot_title = f'Distribution of Context {plot_title_suffix} Scores'
-        elif pairwise_available:
-            scatter_plot_title = f'Distribution of Pairwise {plot_title_suffix} Scores'
-        
-        # Set axis titles based on available data
-        x_title = f'Similarity to Context ({plot_title_suffix})' if context_available else 'Position'
-        y_title = f'Avg Pairwise {plot_title_suffix} Similarity' if pairwise_available else 'Idea Index'
+        scatter_plot_title = f'Context vs. Pairwise {plot_title_suffix} Similarity' # Simplified title assumption
+        x_title = f'Similarity to Context ({plot_title_suffix})'
+        y_title = f'Avg Pairwise {plot_title_suffix} Similarity'
 
         fig.update_layout(
             title=dict(text=scatter_plot_title, x=0.5, xanchor='center'),
-            xaxis_title=x_title,
-            yaxis_title=y_title,
-            xaxis=dict(range=[0, 1]),
-            yaxis=dict(range=[0, 1]),
-            showlegend=False,
-            plot_bgcolor='rgba(240, 240, 240, 0.5)',
+            xaxis_title=x_title, yaxis_title=y_title,
+            xaxis=dict(range=[0, 1]), yaxis=dict(range=[0, 1]),
+            showlegend=False, plot_bgcolor='rgba(240, 240, 240, 0.5)',
             margin=dict(t=80, b=60, l=60, r=40)
         )
         
-        # Add a note if using placeholder data
-        if not (context_available and pairwise_available):
-            fig.add_annotation(
-                x=0.5, y=0.05,
-                text="Note: Some data unavailable, showing partial visualization",
-                showarrow=False,
-                font=dict(color="red", size=12)
-            )
-
+        print(f"[DEBUG_SCATTER] Successfully created scatter plot figure for: {plot_title_suffix}")
         return fig
 
     def _create_dashboard_html(self, experiment_dir: str, metadata: dict, summary: dict):
@@ -1200,7 +1161,7 @@ class ExperimentTracker:
         <html>
         <head>
             <title>Experiment Results - {metadata['name']}</title>
-            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+            <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
             <style>
                 body {{
                     font-family: Arial, sans-serif;
@@ -1415,25 +1376,31 @@ class ExperimentTracker:
                                 <tr><th>Metric</th><th>Mean</th><th>Median</th><th>Std</th></tr>
                                 <tr>
                                     <td>Cosine</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine_similarity', {}).get('mean', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine_similarity', {}).get('median', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine_similarity', {}).get('std', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine', {}).get('mean', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine', {}).get('median', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('cosine', {}).get('std', 0.0):.3f}</td>
                                 </tr>
                                 <tr>
                                     <td>Self-BLEU</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu', {}).get('mean', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu', {}).get('median', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu', {}).get('std', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu_scores', {}).get('mean', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu_scores', {}).get('median', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('self_bleu_scores', {}).get('std', 0.0):.3f}</td>
                                 </tr>
                                 <tr>
                                     <td>BERTScore</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore', {}).get('mean', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore', {}).get('median', 0.0):.3f}</td>
-                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore', {}).get('std', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore_scores', {}).get('mean', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore_scores', {}).get('median', 0.0):.3f}</td>
+                                    <td>{summary.get('Pairwise Similarities', {}).get('bertscore_scores', {}).get('std', 0.0):.3f}</td>
                                 </tr>
                             </table>
                         </div>
                     </div>
+                </div>
+
+                <!-- ADDED Section for Context Similarity Over Time Plot -->
+                <h2>Context Similarity Trend</h2>
+                <div class="plot-container" id="context-similarity">
+                    <p class="plot-description">Average similarity of generated ideas to the original context across the run. (Note: If only one run/batch, this may show a single point or be less informative as a trend).</p>
                 </div>
 
                 <!-- Section 3: Idea Details Table -->
@@ -1498,13 +1465,13 @@ class ExperimentTracker:
         # Use the column names that actually contain the lists of scores in _results_df
         metric_cols_for_kde = {
             # Context Metrics
-            'context_cosine': 'context-cosine-dist',
-            'context_self_bleu': 'context-bleu-dist',
-            'context_bertscore': 'context-bert-dist',
+            'context_cosine_scores_raw': 'context-cosine-dist',
+            'context_self_bleu_scores_raw': 'context-bleu-dist',
+            'context_bertscore_scores_raw': 'context-bert-dist',
             # Pairwise Metrics
-            'avg_cosine_similarity': 'pairwise-cosine-dist',
-            'avg_self_bleu': 'pairwise-bleu-dist',
-            'avg_bertscore': 'pairwise-bert-dist'
+            'cosine_similarities': 'pairwise-cosine-dist',
+            'self_bleu_scores': 'pairwise-bleu-dist',
+            'bertscore_scores': 'pairwise-bert-dist'
         }
         for metric_col_name, div_id in metric_cols_for_kde.items():
             if metric_col_name in self._results_df.columns:
@@ -1525,31 +1492,31 @@ class ExperimentTracker:
             
         # Add the new Similarity Scatter Plots
         scatter_cosine_fig = self._create_similarity_scatter_plot(
-            context_metric_col='context_cosine',
-            pairwise_metric_col='avg_cosine_similarity',
+            context_metric_col='context_cosine_scores_raw',
+            pairwise_metric_col='cosine_similarities',
             plot_title_suffix='Cosine'
         )
         if scatter_cosine_fig:
             html_content += f"Plotly.newPlot('similarity-scatter-cosine', {scatter_cosine_fig.to_json()});\n"
 
         scatter_bert_fig = self._create_similarity_scatter_plot(
-            context_metric_col='context_bertscore',
-            pairwise_metric_col='avg_bertscore',
+            context_metric_col='context_bertscore_scores_raw',
+            pairwise_metric_col='bertscore_scores',
             plot_title_suffix='BERTScore'
         )
         if scatter_bert_fig:
             html_content += f"Plotly.newPlot('similarity-scatter-bertscore', {scatter_bert_fig.to_json()});\n"
 
         # Add Heatmap plots
-        heatmap_cosine_fig = self._create_heatmap(metric_col_name='avg_cosine_similarity', plot_title_suffix='Cosine')
+        heatmap_cosine_fig = self._create_heatmap(metric_col_name='cosine_similarities', plot_title_suffix='Cosine')
         if heatmap_cosine_fig:
             html_content += f"Plotly.newPlot('cosine-heatmap', {heatmap_cosine_fig.to_json()});\n"
         
-        heatmap_bleu_fig = self._create_heatmap(metric_col_name='avg_self_bleu', plot_title_suffix='Self-BLEU')
+        heatmap_bleu_fig = self._create_heatmap(metric_col_name='self_bleu_scores', plot_title_suffix='Self-BLEU')
         if heatmap_bleu_fig:
             html_content += f"Plotly.newPlot('self-bleu-heatmap', {heatmap_bleu_fig.to_json()});\n"
 
-        heatmap_bertscore_fig = self._create_heatmap(metric_col_name='avg_bertscore', plot_title_suffix='BERTScore')
+        heatmap_bertscore_fig = self._create_heatmap(metric_col_name='bertscore_scores', plot_title_suffix='BERTScore')
         if heatmap_bertscore_fig:
             html_content += f"Plotly.newPlot('bertscore-heatmap', {heatmap_bertscore_fig.to_json()});\n"
         
