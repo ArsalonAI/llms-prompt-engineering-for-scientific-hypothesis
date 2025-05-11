@@ -37,7 +37,7 @@ def run_experiments(paper_content, num_ideas=5):
         {"temp": 0.7, "top_p": 0.7, "top_k": 50, "label": "default"}, # Baseline
         {"temp": 0.9, "top_p": 0.7, "top_k": 50, "label": "temp0.9"},
         {"temp": 0.5, "top_p": 0.7, "top_k": 50, "label": "temp0.5"},
-        #{"temp": 0.7, "top_p": 0.9, "top_k": 50, "label": "top_p0.9"},
+        {"temp": 0.7, "top_p": 0.9, "top_k": 50, "label": "top_p0.9"},
         # Add more configurations as needed
     ]
 
@@ -106,7 +106,7 @@ def main():
     
     # Run experiments
     print("\n=== Starting Prompt Engineering Experiments with Hyperparameter Variations ===")
-    all_experiment_results_with_hparams = run_experiments(paper_content, num_ideas=10)
+    all_experiment_results_with_hparams = run_experiments(paper_content, num_ideas=30)
     
     print("\n=== All Experiments Completed Successfully ===")
     
