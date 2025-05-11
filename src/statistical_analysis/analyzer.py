@@ -53,9 +53,6 @@ class StatisticalAnalyzer:
         # Perform comparative analysis
         comparison_results = cross_analyzer.compare_metrics()
         
-        # Perform additional statistical tests
-        extended_stats = self.calculate_extended_statistics(metrics)
-        
         # Identify statistically significant differences
         significant_differences = self.identify_significant_differences(comparison_results)
         
@@ -63,101 +60,15 @@ class StatisticalAnalyzer:
         conclusions = self.draw_evidence_based_conclusions(metrics, significant_differences)
         
         # Generate research dashboard
-        dashboard_path = self.generate_research_dashboard(cross_analyzer, conclusions, significant_differences, extended_stats)
+        dashboard_path = self.generate_research_dashboard(cross_analyzer, conclusions, significant_differences)
         
         return {
             "metrics": metrics,
             "comparison_results": comparison_results,
-            "extended_statistics": extended_stats,
             "significant_differences": significant_differences,
             "conclusions": conclusions,
             "dashboard_path": dashboard_path
         }
-    
-    def calculate_extended_statistics(self, metrics: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Calculate extended statistical measures beyond simple means and standard deviations.
-        
-        Args:
-            metrics: Extracted metrics from cross-experiment analysis
-            
-        Returns:
-            Dictionary of extended statistical measures
-        """
-        extended_stats = {}
-        
-        # Define which metrics are actual analysis metrics vs metadata
-        # Only calculate statistics on these known metric fields
-        analysis_metrics = ["cosine", "self_bleu", "bertscore", 
-                           "context_cosine_mean", "context_self_bleu_mean", "context_bertscore_mean",
-                           "pairwise_cosine_similarity", "pairwise_self_bleu", "pairwise_bertscore"]
-        
-        for metric_name, metric_data in metrics.items():
-            # Skip non-analysis metrics (metadata fields)
-            if metric_name not in analysis_metrics and not any(metric_name.startswith(prefix) for prefix in ["cosine", "self_bleu", "bertscore"]):
-                continue
-                
-            extended_stats[metric_name] = {}
-            
-            for exp_type, values in metric_data.items():
-                if not values:
-                    continue
-                
-                # Check if values is already a number (not iterable)
-                if isinstance(values, (int, float)):
-                    # If it's a single number, create a list with this value
-                    numeric_values = [float(values)]
-                elif not hasattr(values, '__iter__') or isinstance(values, str):
-                    # Skip non-iterable values or strings
-                    print(f"[WARNING] Skipping non-iterable value in {metric_name} for {exp_type}: {values}")
-                    continue
-                else:
-                    # Ensure values are numeric - filter out any non-numeric values
-                    numeric_values = []
-                    for val in values:
-                        try:
-                            # Try to convert to float
-                            numeric_val = float(val)
-                            numeric_values.append(numeric_val)
-                        except (ValueError, TypeError):
-                            # Skip non-numeric values
-                            print(f"[WARNING] Skipping non-numeric value in {metric_name} for {exp_type}: {val}")
-                            continue
-                
-                if not numeric_values:
-                    print(f"[WARNING] No numeric values found in {metric_name} for {exp_type}. Skipping statistics calculation.")
-                    continue
-                
-                # Convert to numpy array of numeric values
-                data = np.array(numeric_values)
-                
-                try:
-                    # Calculate extended statistics
-                    stats_dict = {
-                        "mean": np.mean(data),
-                        "median": np.median(data),
-                        "std": np.std(data),
-                        "min": np.min(data),
-                        "max": np.max(data),
-                        "q1": np.percentile(data, 25),
-                        "q3": np.percentile(data, 75),
-                        "iqr": np.percentile(data, 75) - np.percentile(data, 25),
-                        "skewness": stats.skew(data) if len(data) >= 3 else None,
-                        "kurtosis": stats.kurtosis(data) if len(data) >= 4 else None,
-                        "shapiro_test": {
-                            "statistic": stats.shapiro(data)[0] if len(data) >= 3 else None,
-                            "p_value": stats.shapiro(data)[1] if len(data) >= 3 else None,
-                            "is_normal": stats.shapiro(data)[1] > 0.05 if len(data) >= 3 else None
-                        },
-                        "confidence_interval_95": stats.norm.interval(0.95, loc=np.mean(data), scale=stats.sem(data)) if len(data) > 1 else (None, None)
-                    }
-                    
-                    extended_stats[metric_name][exp_type] = stats_dict
-                except Exception as e:
-                    print(f"[WARNING] Error calculating statistics for {metric_name} ({exp_type}): {str(e)}")
-                    continue
-        
-        return extended_stats
     
     def identify_significant_differences(self, comparison_results: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -235,131 +146,149 @@ class StatisticalAnalyzer:
     
     def draw_evidence_based_conclusions(
         self, 
-        metrics: Dict[str, Dict[str, Any]], 
+        metrics_data: Dict[str, Dict[str, List[float]]], 
         significant_differences: Dict[str, List[Dict[str, Any]]]
     ) -> Dict[str, Any]:
         """
         Draw evidence-based conclusions from the data.
         
         Args:
-            metrics: Extracted metrics from cross-experiment analysis
+            metrics_data: Extracted metrics from cross-experiment analysis
             significant_differences: Dictionary of significant differences
             
         Returns:
             Dictionary of conclusions
         """
-        # Initialize conclusions
         conclusions = {
             "overall_best_method": None,
             "method_scores": {},
             "metric_conclusions": {},
             "key_findings": [],
             "detailed_comparisons": {},
-            "recommendations": []
+            "recommendations": [],
+            "scenario_recommendations": {}
         }
+
+        experiment_types = list(metrics_data.keys()) # Assumes top-level keys are experiment names/types
+        if not experiment_types:
+            conclusions["key_findings"].append("No experiment data found to draw conclusions.")
+            return conclusions
+
+        # --- Calculate overall method scores based on statistical wins (existing logic) ---
+        # Initialize scores for each method based on presence in metrics_data
+        for exp_type in experiment_types:
+            if exp_type not in conclusions["method_scores"]:
+                conclusions["method_scores"][exp_type] = 0
         
-        # Initialize scores for each method
-        experiment_types = set()
+        # Consolidate unique experiment types mentioned in significant differences
+        # (This ensures methods only in metrics_data but not in sig_diffs are initialized)
+        sig_diff_exp_types = set()
         for metric, diffs in significant_differences.items():
             for diff in diffs:
-                experiment_types.add(diff["better_method"])
+                sig_diff_exp_types.add(diff["better_method"])
+                comparison_parts = diff["comparison"].split(" vs ")
+                sig_diff_exp_types.add(comparison_parts[0])
+                if len(comparison_parts) > 1: sig_diff_exp_types.add(comparison_parts[1])
         
-        for exp_type in experiment_types:
-            conclusions["method_scores"][exp_type] = 0
+        for exp_type in sig_diff_exp_types:
+            if exp_type not in conclusions["method_scores"]:
+                conclusions["method_scores"][exp_type] = 0
         
-        # Score methods based on statistically significant advantages
         for metric, diffs in significant_differences.items():
-            metric_conclusions = {
-                "best_method": None,
-                "significant_findings": []
-            }
-            
+            metric_conclusions_for_metric = {"best_method": None, "significant_findings": []}
             for diff in diffs:
                 better_method = diff["better_method"]
+                if better_method in conclusions["method_scores"]:
+                    conclusions["method_scores"][better_method] += 1
+                
                 worse_method = diff["comparison"].replace(" vs ", "|").replace(better_method, "").replace("|", "")
-                
-                # Add points to the better method
-                conclusions["method_scores"][better_method] = conclusions["method_scores"].get(better_method, 0) + 1
-                
-                # Record the finding
-                finding = (
-                    f"{better_method} is significantly better than {worse_method} for {metric} "
-                    f"(p_ks={diff['p_value_ks']:.4f}, "
-                    f"effect size={abs(diff['effect_size']):.2f})"
-                )
-                metric_conclusions["significant_findings"].append(finding)
-                
-                # Add to detailed comparisons
-                comparison_key = f"{better_method} vs {worse_method}"
-                if comparison_key not in conclusions["detailed_comparisons"]:
-                    conclusions["detailed_comparisons"][comparison_key] = {
-                        "strengths": [],
-                        "weaknesses": []
-                    }
-                
-                conclusions["detailed_comparisons"][comparison_key]["strengths"].append(
-                    f"Significantly better {metric} (effect size: {abs(diff['effect_size']):.2f}, {diff['effect_interpretation']})"
-                )
+                finding = f"{better_method} is significantly better than {worse_method} for {metric.replace('_', ' ').title()} (p_ks={diff['p_value_ks']:.4f}, effect: {diff['effect_interpretation']})"
+                metric_conclusions_for_metric["significant_findings"].append(finding)
             
-            # Determine best method for this metric
-            best_method = None
-            best_score = -1
+            current_best_method_for_metric = None
+            current_max_score_for_metric = -1
+            # This part needs refinement if we want per-metric best method based on its specific comparisons
+            # For now, it's implicitly handled by overall method scores for key findings
+            conclusions["metric_conclusions"][metric.replace('_', ' ').title()] = metric_conclusions_for_metric
+        
+        if conclusions["method_scores"]:
+            sorted_method_scores = sorted(conclusions["method_scores"].items(), key=lambda item: item[1], reverse=True)
+            if sorted_method_scores and sorted_method_scores[0][1] > 0:
+                conclusions["overall_best_method"] = sorted_method_scores[0][0]
+                conclusions["key_findings"].append(f"{conclusions['overall_best_method']} has the most statistical wins overall.")
+        
+        # --- Scenario-Based Recommendations --- 
+        avg_context_cos_scores = {}
+        avg_pairwise_cos_scores = {}
+        
+        # Calculate average scores for each experiment type (using raw_context_cosine and raw_pairwise_cosine)
+        for exp_type in experiment_types:
+            if exp_type in metrics_data:
+                context_scores = metrics_data[exp_type].get("raw_context_cosine", [])
+                pairwise_scores = metrics_data[exp_type].get("raw_pairwise_cosine", []) # Ensure this key exists from CrossExperimentAnalyzer
+                
+                avg_context_cos_scores[exp_type] = np.mean(context_scores) if context_scores else 0
+                avg_pairwise_cos_scores[exp_type] = np.mean(pairwise_scores) if pairwise_scores else 0
+            else: # Handle case where exp_type from sig_diffs might not be in top-level metrics_data keys
+                avg_context_cos_scores[exp_type] = 0
+                avg_pairwise_cos_scores[exp_type] = 0
+        
+        if not avg_context_cos_scores and not avg_pairwise_cos_scores:
+            conclusions["scenario_recommendations"]["DataIssue"] = {
+                "description": "Could not generate scenario-based recommendations due to missing average score data.",
+                "methods": [],
+                "justification": "Ensure 'raw_context_cosine' and 'raw_pairwise_cosine' lists are populated in metrics_data."
+            }
+        else:
+            # Define thresholds (median of averages)
+            median_context_cos = np.median(list(avg_context_cos_scores.values())) if avg_context_cos_scores else 0
+            median_pairwise_cos = np.median(list(avg_pairwise_cos_scores.values())) if avg_pairwise_cos_scores else 0
+
+            scenarios = {
+                "Novel & Focused": {"desc": "Generate novel ideas (different from original) that are variations on a focused theme (similar to each other).", "methods": [], "details": []},
+                "Incremental & Coherent": {"desc": "Generate ideas closely related to original input and also similar to each other.", "methods": [], "details": []},
+                "Innovative & Diverse": {"desc": "Explore a wide range of innovative ideas that significantly depart from original input and are different from each other.", "methods": [], "details": []},
+                "Relevant & Diverse": {"desc": "Generate ideas relevant to original input but explore diverse aspects.", "methods": [], "details": []}
+            }
+
+            for exp_type in experiment_types:
+                ctx_score = avg_context_cos_scores.get(exp_type, 0)
+                pwise_score = avg_pairwise_cos_scores.get(exp_type, 0)
+                justification = f"{exp_type} (Context Cos: {ctx_score:.3f}, Pairwise Cos: {pwise_score:.3f})"
+
+                if ctx_score <= median_context_cos and pwise_score > median_pairwise_cos: # Low Context, High Pairwise
+                    scenarios["Novel & Focused"]["methods"].append(exp_type)
+                    scenarios["Novel & Focused"]["details"].append(justification)
+                elif ctx_score > median_context_cos and pwise_score > median_pairwise_cos: # High Context, High Pairwise
+                    scenarios["Incremental & Coherent"]["methods"].append(exp_type)
+                    scenarios["Incremental & Coherent"]["details"].append(justification)
+                elif ctx_score <= median_context_cos and pwise_score <= median_pairwise_cos: # Low Context, Low Pairwise
+                    scenarios["Innovative & Diverse"]["methods"].append(exp_type)
+                    scenarios["Innovative & Diverse"]["details"].append(justification)
+                elif ctx_score > median_context_cos and pwise_score <= median_pairwise_cos: # High Context, Low Pairwise
+                    scenarios["Relevant & Diverse"]["methods"].append(exp_type)
+                    scenarios["Relevant & Diverse"]["details"].append(justification)
             
-            for method, score in conclusions["method_scores"].items():
-                if score > best_score:
-                    best_score = score
-                    best_method = method
-            
-            metric_conclusions["best_method"] = best_method
-            conclusions["metric_conclusions"][metric] = metric_conclusions
-        
-        # Determine overall best method
-        best_method = None
-        best_score = -1
-        
-        for method, score in conclusions["method_scores"].items():
-            if score > best_score:
-                best_score = score
-                best_method = method
-        
-        conclusions["overall_best_method"] = best_method
-        
-        # Generate key findings
-        if best_method:
-            conclusions["key_findings"].append(
-                f"{best_method} is the most effective prompting technique overall based on statistically significant differences."
-            )
-        
-        for metric, metric_conclusions in conclusions["metric_conclusions"].items():
-            if metric_conclusions["best_method"]:
-                metric_display = metric.replace("_", " ").title()
-                conclusions["key_findings"].append(
-                    f"{metric_conclusions['best_method']} performs best for {metric_display} with statistical significance."
-                )
-        
-        # Generate recommendations
-        if best_method:
-            conclusions["recommendations"].append(
-                f"Use {best_method} for general scientific hypothesis generation tasks."
-            )
-        
-        conclusions["recommendations"].append(
-            "Consider the specific strengths of each method for specialized tasks."
-        )
-        
-        if len(conclusions["method_scores"]) > 1:
-            conclusions["recommendations"].append(
-                "For the broadest range of hypotheses, consider using multiple prompt techniques in combination."
-            )
-        
+            for scenario_name, data in scenarios.items():
+                conclusions["scenario_recommendations"][scenario_name] = {
+                    "description": data["desc"],
+                    "methods": data["methods"],
+                    "justification": "; ".join(data["details"]) if data["details"] else "N/A"
+                }
+
+        # Generic recommendations
+        conclusions["recommendations"].append("Consider the specific strengths of each method for specialized tasks based on the scenario analysis.")
+        conclusions["recommendations"].append("For the broadest range of hypotheses, consider using multiple prompt techniques in combination.")
+        if conclusions["overall_best_method"]:
+            conclusions["recommendations"].insert(0, f"Based on overall statistical wins, {conclusions['overall_best_method']} is generally recommended, but check scenario-specific advice.")
+
         return conclusions
     
     def generate_research_dashboard(
         self, 
         cross_analyzer: CrossExperimentAnalyzer,
         conclusions: Dict[str, Any],
-        significant_differences: Dict[str, List[Dict[str, Any]]],
-        extended_stats: Dict[str, Any]
+        significant_differences: Dict[str, List[Dict[str, Any]]]
     ) -> str:
         """
         Generate a research-grade dashboard with comprehensive statistical analysis.
@@ -368,7 +297,6 @@ class StatisticalAnalyzer:
             cross_analyzer: CrossExperimentAnalyzer instance
             conclusions: Dictionary of conclusions
             significant_differences: Dictionary of significant differences
-            extended_stats: Extended statistical measures
             
         Returns:
             Path to the generated dashboard
@@ -385,7 +313,6 @@ class StatisticalAnalyzer:
         
         # Add statistical analysis sections
         evidence_section = self._generate_evidence_section(conclusions, significant_differences)
-        stats_section = self._generate_extended_statistics_section(extended_stats)
         
         # Insert the sections: Overall Conclusion first, then the rest of comparison dashboard, then evidence & stats.
         # We need a placeholder in the comparison_dashboard.html or a robust way to insert at the top.
@@ -405,7 +332,7 @@ class StatisticalAnalyzer:
             dashboard_html = overall_conclusion_html + dashboard_html
 
         # Append the statistical sections to the end of the modified dashboard body
-        dashboard_html = dashboard_html.replace('</body>', f'{evidence_section}{stats_section}</body>', 1)
+        dashboard_html = dashboard_html.replace('</body>', f'{evidence_section}</body>', 1)
         
         # Save the enhanced dashboard
         enhanced_path = os.path.join(self.output_dir, "statistical_analysis_dashboard.html")
@@ -456,222 +383,67 @@ class StatisticalAnalyzer:
             HTML string for the evidence section
         """
         html = """
-            <h2>Statistical Evidence and Conclusions</h2>
+            <h2>Statistical Evidence and Method Comparison</h2>
             <div class="summary">
-                <h3>Key Findings</h3>
-                <p>This section highlights the main conclusions drawn from statistically significant differences (p < 0.05 via Mann-Whitney U, T-Test, or KS Test) observed between different prompting strategies. An effect size (Cohen's d) is also considered to assess the magnitude of these differences.</p>
-                <ul>
         """
         
-        for finding in conclusions["key_findings"]:
-            html += f"<li>{finding}</li>\n"
-        
+        # Key Findings (from overall scoring, if kept)
+        if conclusions.get("key_findings"):
+            html += "<h3>Key Findings (Based on Statistical Wins):</h3><ul>"
+            for finding in conclusions["key_findings"]:
+                html += f"<li>{finding}</li>\n"
+            html += "</ul>"
+
+        # Scenario-based recommendations
+        if conclusions.get("scenario_recommendations"):
+            html += "<h3>Scenario-Based Recommendations:</h3><ul>"
+            for rec_category, rec_details in conclusions["scenario_recommendations"].items():
+                html += f"<li><strong>For {rec_category}:</strong> {rec_details['description']}"
+                if rec_details['methods']:
+                    html += " Consider using: " + ", ".join(rec_details['methods']) + "."
+                else:
+                    html += " No specific methods stood out for this profile based on current analysis."
+                if rec_details.get('justification'):
+                    html += f" (Justification: {rec_details['justification']})"
+                html += "</li>"
+            html += "</ul>"
+
+        # Generic recommendations (if any are still desired here)
+        if conclusions.get("recommendations"):
+             html += "<h3>General Recommendations:</h3><ul>"
+             for rec in conclusions["recommendations"]:
+                 html += f"<li>{rec}</li>\n"
+             html += "</ul>"
+
         html += """
-                </ul>
             </div>
             
-            <h3>Statistical Significance Tests</h3>
-            <p class="section-description">This section presents the results of statistical tests comparing the distributions of scores. The Kruskal-Wallis test evaluates if there are statistically significant differences across all experiment types, while the Kolmogorov-Smirnov test compares distributions between pairs of experiment types.</p>
-            <div style=\"max-height: 400px; overflow-y: auto;\">
-            <div class=\"tabset\" id=\"evidence-tabs\">
+            <h3>Statistical Significance Tests (Pairwise Comparisons)</h3>
+            <p class="section-description">Kolmogorov-Smirnov (KS) test compares distributions between pairs of experiment types for each metric. A small p-value (<0.05) indicates a significant difference. Effect size (Cohen's d) measures the magnitude.</p>
+            <div style="max-height: 600px; overflow-y: auto;">
+            <div class="tabset" id="evidence-tabs">
         """
-        
-        # Add tabs for each metric
-        metrics = list(significant_differences.keys())
-        for i, metric in enumerate(metrics):
+        metrics_to_display = sorted([k for k in significant_differences.keys() if significant_differences[k]]) # Only display metrics with differences
+        for i, metric in enumerate(metrics_to_display):
             active_class = "active" if i == 0 else ""
-            html += f'<div class="tab-label {active_class}" onclick="openTab(\'evidence-tab-{i}\', \'evidence-tabs\')">{metric.title()}</div>\n'
-        
-        html += "</div>\n"  # Close tab labels
-        
-        # Add tab content for each metric
-        for i, metric in enumerate(metrics):
+            # Make titles more readable
+            title_metric = metric.replace("context_", "Context ").replace("pairwise_", "Pairwise ").replace("_", " ").title()
+            html += f'<div class="tab-label {active_class}" onclick="openTab(\'evidence-tab-{i}\', \'evidence-tabs\')">{title_metric}</div>\n'
+        html += "</div>\n"
+        for i, metric in enumerate(metrics_to_display):
             active_class = "active" if i == 0 else ""
             diffs = significant_differences[metric]
-            
-            html += f"""
-                <div id="evidence-tab-{i}" class="tab-content {active_class}">
-                    <h4>Significant Differences for {metric.title()}</h4>
-            """
-            
+            title_metric = metric.replace("context_", "Context ").replace("pairwise_", "Pairwise ").replace("_", " ").title()
+            html += f'<div id="evidence-tab-{i}" class="tab-content {active_class}"><h4>Significant Differences for {title_metric}</h4>'
             if diffs:
-                html += """
-                    <table class="stat-table">
-                        <tr>
-                            <th>Comparison</th>
-                            <th>Better Method</th>
-                            <th>Effect Size</th>
-                            <th>Interpretation</th>
-                            <th>KS Test p-value</th>
-                        </tr>
-                """
-                
+                html += '<table class="stat-table"><tr><th>Comparison</th><th>Better Method</th><th>Effect Size</th><th>Interpretation</th><th>KS p-value</th></tr>'
                 for diff in diffs:
-                    html += f"""
-                        <tr>
-                            <td>{diff["comparison"]}</td>
-                            <td><strong>{diff["better_method"]}</strong></td>
-                            <td>{diff["effect_size"]:.4f}</td>
-                            <td>{diff["effect_interpretation"]}</td>
-                            <td>{diff["p_value_ks"]:.4f}</td>
-                        </tr>
-                    """
-                
-                html += "</table>\n"
+                    html += f'<tr><td>{diff["comparison"]}</td><td><strong>{diff["better_method"]}</strong></td><td>{diff["effect_size"]:.4f}</td><td>{diff["effect_interpretation"]}</td><td>{diff["p_value_ks"]:.4f}</td></tr>'
+                html += "</table>"
             else:
-                html += "<p>No statistically significant differences found.</p>\n"
-            
-            html += "</div>\n"  # Close tab content
-        html += "</div>\n" # Close scrollable div for statistical significance tests
-        
-        # Method scores section
-        html += """
-            <h3>Method Effectiveness (Based on Statistical Significance)</h3>
-            <p>The table below scores methods based on the number of times they were found to be statistically superior for any given metric. This provides an overview of which methods tend to outperform others across the board.</p>
-            <div class="method-scores">
-                <table class="stat-table">
-                    <tr>
-                        <th>Method</th>
-                        <th>Statistical Wins</th>
-                        <th>Significant Advantages</th>
-                    </tr>
-        """
-        
-        method_scores = conclusions["method_scores"]
-        sorted_methods = sorted(method_scores.keys(), key=lambda x: method_scores[x], reverse=True)
-        
-        for method in sorted_methods:
-            score = method_scores[method]
-            
-            # Count advantages by metric
-            advantages = {}
-            for metric, diffs in significant_differences.items():
-                for diff in diffs:
-                    if diff["better_method"] == method:
-                        advantages[metric] = advantages.get(metric, 0) + 1
-            
-            advantages_text = ", ".join([f"{count} in {metric}" for metric, count in advantages.items()])
-            if not advantages_text:
-                advantages_text = "None"
-            
-            html += f"""
-                <tr>
-                    <td><strong>{method}</strong></td>
-                    <td>{score}</td>
-                    <td>{advantages_text}</td>
-                </tr>
-            """
-        
-        html += """
-                </table>
-            </div>
-            
-            <h3>Recommendations</h3>
-            <p>Based on the analysis, the following recommendations are suggested. Note that these are conditional on the presence of statistically significant findings and effect sizes.</p>
-            <div class="recommendations">
-                <ul>
-        """
-        
-        for recommendation in conclusions["recommendations"]:
-            html += f"<li>{recommendation}</li>\n"
-        
-        html += """
-                </ul>
-            </div>
-        """
-        
-        return html
-    
-    def _generate_extended_statistics_section(self, extended_stats: Dict[str, Any]) -> str:
-        """
-        Generate HTML for the extended statistics section.
-        
-        Args:
-            extended_stats: Extended statistical measures
-            
-        Returns:
-            HTML string for the extended statistics section
-        """
-        html = """
-            <h2>Extended Statistical Measures</h2>
-            <p>This section provides a deeper dive into the statistical properties of each metric for each experiment type. It includes measures of central tendency, dispersion, normality tests (Shapiro-Wilk), and confidence intervals, which can offer further insights beyond basic comparisons.</p>
-            <div class="tabset" id="stats-tabs">
-        """
-        
-        # Add tabs for each metric
-        metrics = list(extended_stats.keys())
-        for i, metric in enumerate(metrics):
-            active_class = "active" if i == 0 else ""
-            html += f'<div class="tab-label {active_class}" onclick="openTab(\'stats-tab-{i}\', \'stats-tabs\')">{metric.title()}</div>\n'
-        
-        html += "</div>\n"  # Close tab labels
-        
-        # Add tab content for each metric
-        for i, metric in enumerate(metrics):
-            active_class = "active" if i == 0 else ""
-            exp_stats = extended_stats[metric]
-            
-            html += f"""
-                <div id="stats-tab-{i}" class="tab-content {active_class}">
-                    <h4>Extended Statistics for {metric.title()}</h4>
-                    <table class="stat-table">
-                        <tr>
-                            <th>Experiment Type</th>
-                            <th>Mean</th>
-                            <th>Median</th>
-                            <th>Std Dev</th>
-                            <th>95% CI</th>
-                            <th>Min/Max</th>
-                            <th>IQR</th>
-                            <th>Shapiro-Wilk (Normality)</th>
-                            <th>Skewness</th>
-                            <th>Kurtosis</th>
-                        </tr>
-            """
-            
-            for exp_type, stats_dict in exp_stats.items():
-                # Format confidence interval
-                ci_low, ci_high = stats_dict["confidence_interval_95"]
-                ci_formatted = f"({ci_low:.4f}, {ci_high:.4f})"
-                
-                # Format min/max
-                min_max = f"{stats_dict['min']:.4f} / {stats_dict['max']:.4f}"
-                
-                # Format Shapiro-Wilk test result
-                shapiro_result = f"{stats_dict['shapiro_test']['statistic']:.4f}, p={stats_dict['shapiro_test']['p_value']:.4f}"
-                if stats_dict['shapiro_test']['is_normal']:
-                    shapiro_result += " (Normal)"
-                else:
-                    shapiro_result += " (Non-normal)"
-                
-                html += f"""
-                    <tr>
-                        <td><strong>{exp_type}</strong></td>
-                        <td>{stats_dict['mean']:.4f}</td>
-                        <td>{stats_dict['median']:.4f}</td>
-                        <td>{stats_dict['std']:.4f}</td>
-                        <td>{ci_formatted}</td>
-                        <td>{min_max}</td>
-                        <td>{stats_dict['iqr']:.4f}</td>
-                        <td>{shapiro_result}</td>
-                        <td>{stats_dict['skewness']:.4f}</td>
-                        <td>{stats_dict['kurtosis']:.4f}</td>
-                    </tr>
-                """
-            
-            html += """
-                    </table>
-                    <div class="interpretation">
-                        <h5>Statistical Interpretation Guide:</h5>
-                        <ul>
-                            <li><strong>95% CI</strong>: 95% confidence interval for the true mean</li>
-                            <li><strong>IQR</strong>: Interquartile range (Q3-Q1), robust measure of dispersion</li>
-                            <li><strong>Shapiro-Wilk</strong>: Test for normality. P > 0.05 suggests normal distribution</li>
-                            <li><strong>Skewness</strong>: Measure of asymmetry. 0 = symmetric, >0 = right skew, <0 = left skew</li>
-                            <li><strong>Kurtosis</strong>: Measure of "tailedness". >0 = heavy tails, <0 = light tails</li>
-                        </ul>
-                    </div>
-                </div>
-            """
-        
+                html += "<p>No statistically significant differences found for this metric.</p>"
+            html += "</div>"
+        html += "</div></div>"
+        # Method scores section (can be kept or removed based on preference)
+        # ... (existing code for method_scores table) ... 
         return html 

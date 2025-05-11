@@ -30,81 +30,59 @@ def load_paper_content():
     return extract_paper_content(pdf_path)
 
 def run_experiments(paper_content, num_ideas=5):
-    """
-    Run multiple experiments with different prompt techniques.
-    
-    Args:
-        paper_content: Dictionary containing paper content
-        num_ideas: Number of ideas to generate per experiment
-    
-    Returns:
-        Dictionary containing experiment results
-    """
-    experiment_results = {}
-    
-    # Initialize experiment tracker
+    all_run_results = {} # To store results from all hyperparameter variants
+
+    # Define hyperparameter configurations to test
+    hyperparam_configs = [
+        {"temp": 0.7, "top_p": 0.7, "top_k": 50, "label": "default"}, # Baseline
+        {"temp": 0.9, "top_p": 0.7, "top_k": 50, "label": "temp0.9"},
+        {"temp": 0.5, "top_p": 0.7, "top_k": 50, "label": "temp0.5"},
+        #{"temp": 0.7, "top_p": 0.9, "top_k": 50, "label": "top_p0.9"},
+        # Add more configurations as needed
+    ]
+
     with ExperimentTracker(output_dir=EXPERIMENT_RESULTS_DIR) as tracker:
-        # Initialize experiment runners
-        scientific_runner = ScientificHypothesisRunner(
-            tracker=tracker,
-            llama_fn=llama_3_3_70B_completion,
-            model_name="llama-3-3-70b",
-            domain="genetic engineering",
-            focus_area="CRISPR gene editing",
-            num_ideas=num_ideas
-        )
+        for hp_config in hyperparam_configs:
+            print(f"\n=== Running Experiments with Hyperparams: {hp_config['label']} ===")
+            current_temp = hp_config['temp']
+            current_top_p = hp_config['top_p']
+            current_top_k = hp_config['top_k']
+            # Assuming repetition_penalty and max_tokens remain default for now, or add them to hp_config
+
+            # Instantiate runners with current hyperparameters
+            scientific_runner = ScientificHypothesisRunner(
+                tracker=tracker, llama_fn=llama_3_3_70B_completion, model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                num_ideas=num_ideas, temperature=current_temp, top_p=current_top_p, top_k=current_top_k
+            )
+            role_based_runner = RoleBasedHypothesisRunner(
+                tracker=tracker, llama_fn=llama_3_3_70B_completion, model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                num_ideas=num_ideas, temperature=current_temp, top_p=current_top_p, top_k=current_top_k
+            )
+            few_shot_runner = FewShotHypothesisRunner(
+                tracker=tracker, llama_fn=llama_3_3_70B_completion, model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                num_ideas=num_ideas, temperature=current_temp, top_p=current_top_p, top_k=current_top_k
+            )
+
+            runner_setups = [
+                {"runner": scientific_runner, "name_prefix": "Scientific_Hypothesis"},
+                {"runner": role_based_runner, "name_prefix": "Role_Based_Hypothesis"},
+                {"runner": few_shot_runner, "name_prefix": "Few_Shot_Hypothesis"}
+            ]
+
+            for setup in runner_setups:
+                # Construct a unique experiment name including the hyperparameter label
+                experiment_name_full = f"{setup['name_prefix']}__{hp_config['label']}"
+                print(f"\n=== Running: {experiment_name_full} ===")
+                
+                results = setup["runner"].run(
+                    experiment_name_full, 
+                    paper_content,
+                    skip_intermediate_calculations=True
+                    # The runner.run() will use the hyperparams it was initialized with
+                )
+                all_run_results[experiment_name_full] = results
         
-        role_based_runner = RoleBasedHypothesisRunner(
-            tracker=tracker,
-            llama_fn=llama_3_3_70B_completion,
-            model_name="llama-3-3-70b",
-            domain="genetic engineering",
-            focus_area="CRISPR gene editing",
-            num_ideas=num_ideas
-        )
-        
-        few_shot_runner = FewShotHypothesisRunner(
-            tracker=tracker,
-            llama_fn=llama_3_3_70B_completion,
-            model_name="llama-3-3-70b",
-            domain="genetic engineering",
-            focus_area="CRISPR gene editing",
-            num_ideas=num_ideas
-        )
-        
-        # Run experiments
-        print("\n=== Running Scientific Hypothesis Experiment ===")
-        scientific_results = scientific_runner.run(
-            "Scientific_Hypothesis", 
-            paper_content,
-            skip_intermediate_calculations=True
-        )
-        experiment_results["Scientific_Hypothesis"] = scientific_results
-        
-        print("\n=== Running Role-Based Hypothesis Experiment ===")
-        role_based_results = role_based_runner.run(
-            "Role_Based_Hypothesis", 
-            paper_content,
-            skip_intermediate_calculations=True
-        )
-        experiment_results["Role_Based_Hypothesis"] = role_based_results
-        
-        print("\n=== Running Few-Shot Hypothesis Experiment ===")
-        few_shot_results = few_shot_runner.run(
-            "Few_Shot_Hypothesis", 
-            paper_content,
-            skip_intermediate_calculations=True
-        )
-        experiment_results["Few_Shot_Hypothesis"] = few_shot_results
-        
-        # Collect all experiment results
-        all_experiment_results = {
-            "Scientific_Hypothesis": scientific_results,
-            "Role_Based_Hypothesis": role_based_results,
-            "Few_Shot_Hypothesis": few_shot_results
-        }
-        
-    return all_experiment_results
+    return all_run_results
 
 def main():
     """Main function to run all experiments."""
@@ -127,15 +105,15 @@ def main():
     paper_content = load_paper_content()
     
     # Run experiments
-    print("\n=== Starting Prompt Engineering Experiments ===")
-    experiment_results = run_experiments(paper_content, num_ideas=10)
+    print("\n=== Starting Prompt Engineering Experiments with Hyperparameter Variations ===")
+    all_experiment_results_with_hparams = run_experiments(paper_content, num_ideas=10)
     
-    print("\n=== Experiments Completed Successfully ===")
+    print("\n=== All Experiments Completed Successfully ===")
     
     # Perform statistical analysis (combines current and historical data)
     print("\n=== Running Statistical Analysis ===")
     analyzer = StatisticalAnalyzer(
-        current_results=experiment_results,
+        current_results=all_experiment_results_with_hparams,
         experiment_dir=EXPERIMENT_RESULTS_DIR
     )
     

@@ -22,6 +22,11 @@ class BaseExperimentRunner:
         focus_area: str = "CRISPR gene editing",
         num_ideas: int = 10,
         batch_size: int = 5,
+        temperature: float = 0.7,
+        top_p: float = 0.7,
+        top_k: int = 50,
+        repetition_penalty: float = 1.0,
+        max_tokens: int = 1024
     ):
         """
         Initialize the experiment runner.
@@ -34,6 +39,11 @@ class BaseExperimentRunner:
             focus_area: Specific area within the domain
             num_ideas: Number of ideas to generate
             batch_size: Number of ideas to generate in each batch
+            temperature: Temperature for the language model
+            top_p: Top_p for the language model
+            top_k: Top_k for the language model
+            repetition_penalty: Repetition penalty for the language model
+            max_tokens: Maximum tokens for the language model
         """
         self.tracker = tracker
         self.llama_fn = llama_fn
@@ -42,6 +52,11 @@ class BaseExperimentRunner:
         self.focus_area = focus_area
         self.num_ideas = num_ideas
         self.batch_size = batch_size
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.repetition_penalty = repetition_penalty
+        self.max_tokens = max_tokens
         self.experiment_results = {}
     
     def prepare_experiment(self, experiment_name: str, paper_content: Dict[str, str]) -> Dict[str, Any]:
@@ -55,10 +70,24 @@ class BaseExperimentRunner:
         Returns:
             Dictionary containing experiment configuration
         """
-        raise NotImplementedError("Subclasses must implement prepare_experiment")
+        base_config = {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "repetition_penalty": self.repetition_penalty,
+            "max_tokens": self.max_tokens
+        }
+        print(f"[BaseRunner] prepare_experiment returning base LLM hyperparams in config: {base_config}")
+        return base_config
     
     def run(self, experiment_name: str, paper_content: Dict[str, str], 
-             skip_intermediate_calculations: bool = True) -> Dict[str, Any]:
+             skip_intermediate_calculations: bool = True,
+             temperature: Optional[float] = None,
+             top_p: Optional[float] = None,
+             top_k: Optional[int] = None,
+             repetition_penalty: Optional[float] = None,
+             max_tokens: Optional[int] = None
+            ) -> Dict[str, Any]:
         """
         Run the experiment.
         
@@ -66,26 +95,42 @@ class BaseExperimentRunner:
             experiment_name: Name of the experiment
             paper_content: Dictionary containing paper content
             skip_intermediate_calculations: Whether to skip intermediate calculations for speed
+            temperature: Temperature for the language model
+            top_p: Top_p for the language model
+            top_k: Top_k for the language model
+            repetition_penalty: Repetition penalty for the language model
+            max_tokens: Maximum tokens for the language model
             
         Returns:
             Dictionary containing experiment results
         """
-        # Prepare experiment configuration
         config = self.prepare_experiment(experiment_name, paper_content)
         
-        # Start the experiment with configuration
+        current_temp = temperature if temperature is not None else self.temperature
+        current_top_p = top_p if top_p is not None else self.top_p
+        current_top_k = top_k if top_k is not None else self.top_k
+        current_rep_penalty = repetition_penalty if repetition_penalty is not None else self.repetition_penalty
+        current_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        
+        config.update({
+            "temperature": current_temp,
+            "top_p": current_top_p,
+            "top_k": current_top_k,
+            "repetition_penalty": current_rep_penalty,
+            "max_tokens": current_max_tokens,
+            "base_model_name": self.model_name,
+            "num_ideas_requested": self.num_ideas
+        })
+        
         self.tracker.start_experiment(
             experiment_name=experiment_name,
-            experiment_type="idea_generation",
+            experiment_type=config.get("prompt_strategy_type", "idea_generation"),
             model_name=self.model_name,
             config=config
         )
         
-        # Generate a unique run ID
         run_id = self.tracker.generate_run_id("run")
         
-        # Create context from paper content
-        # Use .get() for safety in case keys are missing from paper_content
         abstract_content = paper_content.get('abstract', '')
         methods_content = paper_content.get('methods', '')
         context = f"Abstract: {abstract_content}\nMethods: {methods_content}"
@@ -96,7 +141,6 @@ class BaseExperimentRunner:
         if not methods_content:
             print("[WARNING] BaseExperimentRunner: Methods missing or empty from paper_content.")
         
-        # Run the experiment batch
         start_time = time.time()
         print(f"\n[INFO] Starting experiment: {experiment_name}")
         
@@ -105,10 +149,14 @@ class BaseExperimentRunner:
             system_prompt=config["system_prompt"],
             context=context,
             run_id=run_id,
-            skip_intermediate_calculations=skip_intermediate_calculations
+            skip_intermediate_calculations=skip_intermediate_calculations,
+            temperature=current_temp,
+            top_p=current_top_p,
+            top_k=current_top_k,
+            repetition_penalty=current_rep_penalty,
+            max_tokens=current_max_tokens
         )
         
-        # Store results for this experiment
         self.experiment_results[experiment_name] = results
         
         total_time = time.time() - start_time
@@ -122,7 +170,12 @@ class BaseExperimentRunner:
         system_prompt: str, 
         context: str, 
         run_id: str,
-        skip_intermediate_calculations: bool = True
+        skip_intermediate_calculations: bool = True,
+        temperature: float = 0.7,
+        top_p: float = 0.7,
+        top_k: int = 50,
+        repetition_penalty: float = 1.0,
+        max_tokens: int = 1024
     ) -> Dict[str, Any]:
         """
         Run the idea generation batch using the imported function.
@@ -133,18 +186,27 @@ class BaseExperimentRunner:
             context: Context information for the model
             run_id: Unique identifier for this run
             skip_intermediate_calculations: Whether to skip intermediate calculations for speed
+            temperature: Temperature for the language model
+            top_p: Top_p for the language model
+            top_k: Top_k for the language model
+            repetition_penalty: Repetition penalty for the language model
+            max_tokens: Maximum tokens for the language model
             
         Returns:
             Dictionary containing experiment results
         """
         from experiment_runner_templates import run_idea_generation_batch
         
-        # Run the experiment using the existing function
         results = run_idea_generation_batch(
             prompt=prompt,
             llama_fn=lambda p, context=None: self.llama_fn(
                 prompt=f"{context}\n\n{p}" if context else p, 
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                max_tokens=max_tokens
             ),
             model_name=self.model_name,
             run_id=run_id,

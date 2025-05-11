@@ -31,29 +31,26 @@ class ScientificHypothesisRunner(BaseExperimentRunner):
         Returns:
             Dictionary containing experiment configuration
         """
-        # Generate experiment-specific prompts
-        system_prompt = generate_scientific_system_prompt()
+        # Call super to get base config with LLM hyperparams
+        config = super().prepare_experiment(experiment_name, paper_content)
         
+        system_prompt = generate_scientific_system_prompt()
         main_prompt = generate_scientific_hypothesis_prompt(
             domain=self.domain,
             focus_area=self.focus_area,
-            context={
-                'abstract': paper_content['abstract'],
-                'methods': paper_content['methods']
+            context = {
+                'abstract': paper_content.get('abstract', ''),
+                'methods': paper_content.get('methods', '')
             }
         )
         
-        # Create experiment configuration
-        config = {
-            "domain": self.domain,
-            "focus_area": self.focus_area,
-            "num_ideas": self.num_ideas,
-            "batch_size": self.batch_size,
+        # Update config with specific prompts and strategy type
+        config.update({
             "system_prompt": system_prompt,
             "main_prompt": main_prompt,
+            "prompt_strategy_type": "Scientific_Hypothesis", # For experiment grouping
             "evaluation_criteria": self.evaluator.get_evaluation_criteria() if self.evaluator else []
-        }
-        
+        })
         return config
     
     def _evaluate_quality(self, idea: str, context: str = None) -> Dict[str, Any]:

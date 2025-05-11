@@ -22,26 +22,21 @@ class RoleBasedHypothesisRunner(BaseExperimentRunner):
         Returns:
             Dictionary containing experiment configuration
         """
-        # Generate system prompt similar to scientific method
-        system_prompt = generate_scientific_system_prompt()
+        config = super().prepare_experiment(experiment_name, paper_content)
         
-        # Create combined text for role-based prompt
-        combined_text = f"Abstract: {paper_content['abstract']}\n\nMethods: {paper_content['methods']}"
+        role_description = f"You are an experienced researcher in {self.domain} with a specialization in {self.focus_area}. You are known for your ability to synthesize information and propose innovative research directions."
         
-        # Generate the role-based prompt
+        system_prompt = "You are an AI assistant adopting a specific research persona to generate hypotheses."
         main_prompt = generate_role_based_prompt(
-            combined_text=combined_text,
+            combined_text=f"{paper_content.get('abstract', '')}\n\n{paper_content.get('methods', '')}",
+            role_description=role_description,
             domain=self.domain
         )
         
-        # Create experiment configuration
-        config = {
-            "domain": self.domain,
-            "focus_area": self.focus_area,
-            "num_ideas": self.num_ideas,
-            "batch_size": self.batch_size,
+        config.update({
             "system_prompt": system_prompt,
             "main_prompt": main_prompt,
-        }
-        
+            "prompt_strategy_type": "Role_Based_Hypothesis",
+            "role_description_used": role_description
+        })
         return config 
