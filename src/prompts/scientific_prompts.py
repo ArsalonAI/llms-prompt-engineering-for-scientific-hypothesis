@@ -15,12 +15,9 @@ Your hypotheses should be:
 2. Novel and not obvious
 3. Well-grounded in existing scientific knowledge
 4. Clear and specific
-5. Potentially impactful if proven true"""
+5. Potentially impactful if proven true
 
-    if abstract:
-        base_prompt += f"\n\nConsider this context from a relevant research paper:\n{abstract}"
-
-    base_prompt += "\n\nFormat your response as a single, clear hypothesis statement."
+Format your response as a single, clear hypothesis statement."""
     
     return base_prompt
 

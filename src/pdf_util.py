@@ -49,7 +49,8 @@ def fuzzy_match_header(header, valid_headers):
     return match[0] if match else None
 
 def extract_sections(text, section_headers=None, max_tokens=512):
-    
+    # Returns a dict where keys are section names and values are lists of text chunks with token counts
+
     if section_headers is None:
         section_headers = ['Abstract', 'Introduction', 'Methods', 'Results', 'Discussion', 'Conclusion']
 
@@ -83,4 +84,23 @@ def extract_sections(text, section_headers=None, max_tokens=512):
         sections[header_name] = [{"chunk": chunk, "token_count": count_tokens(chunk)} for chunk in chunks]
 
     return sections
+
+def extract_paper_content(pdf_path):
+    """Extract and process content from a research paper PDF."""
+    # Extract raw text
+    raw_text = extract_text_from_pdf(pdf_path)
+    cleaned_text = clean_text(raw_text)
+    
+    # Extract sections
+    sections = extract_sections(cleaned_text)
+    
+    # Get abstract and methods sections
+    abstract = ' '.join(chunk['chunk'] for chunk in sections.get('Abstract', [{'chunk': ''}]))
+    methods = ' '.join(chunk['chunk'] for chunk in sections.get('Methods', [{'chunk': ''}]))
+    
+    return {
+        'abstract': abstract,
+        'methods': methods,
+        'sections': sections
+    }
 
