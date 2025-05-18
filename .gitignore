@@ -1,6 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
 # Virtual Environment
 venv/
 env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Experiment Results
+experiment_results/
+
+# Logs
+*.log
+
+# Local development settings
+.env
 
 # Environment variables
 .env

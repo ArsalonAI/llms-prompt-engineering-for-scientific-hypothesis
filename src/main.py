@@ -12,7 +12,8 @@ from pdf_util import extract_paper_content
 from experiment_runners import (
     ScientificHypothesisRunner,
     RoleBasedHypothesisRunner,
-    FewShotHypothesisRunner
+    FewShotHypothesisRunner,
+    ChainOfThoughtHypothesisRunner
 )
 from statistical_analysis import StatisticalAnalyzer
 from cross_experiment_analysis.runner import run_cross_experiment_analysis
@@ -62,11 +63,16 @@ def run_experiments(paper_content, num_ideas=5):
                 tracker=tracker, llama_fn=llama_3_3_70B_completion, model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
                 num_ideas=num_ideas, temperature=current_temp, top_p=current_top_p, top_k=current_top_k
             )
+            chain_of_thought_runner = ChainOfThoughtHypothesisRunner(
+                tracker=tracker, llama_fn=llama_3_3_70B_completion, model_name="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                num_ideas=num_ideas, temperature=current_temp, top_p=current_top_p, top_k=current_top_k
+            )
 
             runner_setups = [
                 {"runner": scientific_runner, "name_prefix": "Scientific_Hypothesis"},
                 {"runner": role_based_runner, "name_prefix": "Role_Based_Hypothesis"},
-                {"runner": few_shot_runner, "name_prefix": "Few_Shot_Hypothesis"}
+                {"runner": few_shot_runner, "name_prefix": "Few_Shot_Hypothesis"},
+                {"runner": chain_of_thought_runner, "name_prefix": "Chain_Of_Thought_Hypothesis"}
             ]
 
             for setup in runner_setups:
@@ -106,7 +112,7 @@ def main():
     
     # Run experiments
     print("\n=== Starting Prompt Engineering Experiments with Hyperparameter Variations ===")
-    all_experiment_results_with_hparams = run_experiments(paper_content, num_ideas=30)
+    all_experiment_results_with_hparams = run_experiments(paper_content, num_ideas=50)
     
     print("\n=== All Experiments Completed Successfully ===")
     

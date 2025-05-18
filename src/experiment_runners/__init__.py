@@ -8,10 +8,12 @@ from .base_runner import BaseExperimentRunner
 from .scientific_runner import ScientificHypothesisRunner
 from .role_based_runner import RoleBasedHypothesisRunner
 from .few_shot_runner import FewShotHypothesisRunner
+from .chain_of_thought_runner import ChainOfThoughtHypothesisRunner
 
 __all__ = [
     'BaseExperimentRunner',
     'ScientificHypothesisRunner',
     'RoleBasedHypothesisRunner',
-    'FewShotHypothesisRunner'
+    'FewShotHypothesisRunner',
+    'ChainOfThoughtHypothesisRunner'
 ] 

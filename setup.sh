@@ -3,10 +3,13 @@
 echo "Setting up LLMs for Scientific Hypothesis Generation project..."
 
 # Create virtual environment if it doesn't exist
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
+if [ -d "venv" ]; then
+    echo "Removing existing virtual environment..."
+    rm -rf venv
 fi
+
+echo "Creating fresh virtual environment..."
+python3 -m venv venv
 
 # Activate virtual environment
 echo "Activating virtual environment..."
@@ -16,9 +19,22 @@ source venv/bin/activate
 echo "Upgrading pip..."
 pip install --upgrade pip
 
-# Install dependencies
+# Clean up any existing installations
+echo "Cleaning up existing packages..."
+pip freeze | xargs pip uninstall -y
+
+# Install dependencies with verbose output
 echo "Installing dependencies..."
-pip install -r requirements.txt
+pip install -r requirements.txt -v
+
+# Verify plotly installation
+echo "Verifying plotly installation..."
+if python -c "import plotly" &> /dev/null; then
+    echo "✓ Plotly successfully installed"
+else
+    echo "! Error: Plotly installation failed. Trying alternative install..."
+    pip install plotly --no-cache-dir -v
+fi
 
 # Install IPython kernel for Jupyter
 echo "Installing Jupyter kernel..."

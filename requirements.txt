@@ -27,3 +27,6 @@ tiktoken
 torch
 transformers
 
+# Plotting
+plotly>=4.14.3
+
